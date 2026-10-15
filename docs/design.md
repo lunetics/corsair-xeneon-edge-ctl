@@ -1,6 +1,6 @@
 # Design
 
-Status: accepted design for version 0.1. Nothing here is implemented yet.
+Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`. Not yet implemented: profiles, `blank`/`unblank`, OSD navigation.
 
 ## Contents
 
@@ -63,7 +63,9 @@ Known traps:
 The gains belong to the active colour preset: with the 7500K preset active, HID
 `0x0E` reported that preset's gains (104/105/107) while DDC/CI VCP `0x16`,
 `0x18`, `0x1A` kept reporting the stored user gains. The tool reads gains over
-HID and labels DDC/CI gain values as "stored user gains".
+HID and labels DDC/CI gain values as "stored user gains". With the user preset
+active, a gain written over HID also changes the stored user gain that DDC/CI
+reports, and writing the user preset again left the gains unchanged (one test).
 
 Settings that exist only in the on-screen menu (effect, saturation, low blue
 light, aspect, DCR, overdrive, audio, menu time, OSD position) follow in a later

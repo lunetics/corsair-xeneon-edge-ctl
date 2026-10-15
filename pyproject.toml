@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "corsair-xeneon-edge-ctl"
+version = "0.1.0.dev0"
+description = "Command-line control for the Corsair Xeneon Edge display on Linux (USB HID and DDC/CI)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Lunetics" }]
+keywords = ["corsair", "xeneon", "ddc", "hid", "monitor", "cli"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware",
+]
+
+[project.urls]
+Homepage = "https://github.com/lunetics/corsair-xeneon-edge-ctl"
+Changelog = "https://github.com/lunetics/corsair-xeneon-edge-ctl/blob/main/CHANGELOG.md"

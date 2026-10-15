@@ -1,0 +1,4 @@
+# corsair-xeneon-edge-ctl: give the logged-in user access to the HID control interface
+# of the Corsair Xeneon Edge (USB 1b1c:1d0d). The number must stay below 73 so that
+# 73-seat-late.rules evaluates the uaccess tag.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1b1c", ATTRS{idProduct}=="1d0d", TAG+="uaccess"

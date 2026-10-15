@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local agent and tooling state (AGENTS.md is the public file)
+CLAUDE.md
+AI_Continuation_*.md
+.claude/
+.review/
+.serena/
+graphify-out/

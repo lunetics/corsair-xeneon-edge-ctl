@@ -110,6 +110,16 @@ class FakeDisplay:
         ]
     )
     ignored_writes: set[str] = field(default_factory=set)
+    # VCP 0xD6 (power mode): 01 is on; after a write of 05 the measured reading is 04.
+    power_mode: int = 1
+    blank_reading: int = 4
+    # When set, DDC/CI stops answering reads after a write of 05, until 01 is written.
+    silent_after_blank: bool = False
+    ddc_answers: bool = True
+    # Every write that reached the display, from both channels, in order: (name, value).
+    writes: list[tuple[str, int]] = field(default_factory=list)
+    # Writing a preset moves the effective gains, as on the device: {preset: (red, green, blue)}.
+    preset_gains: dict[int, tuple[int, int, int]] = field(default_factory=dict)
 
     def detect_text(self) -> str:
         """Output of ``ddcutil detect --brief`` in the captured format."""
@@ -150,14 +160,24 @@ class FakeHidIo:
         name = {(2, 0): "backlight", (2, 1): "contrast", (2, 2): "brightness", (3, 1): "red", (3, 2): "green", (3, 3): "blue"}.get(
             (group, selector)
         )
-        if name is not None and name not in display.ignored_writes:
+        if name is None:
+            return
+        display.writes.append((name, value))
+        if name not in display.ignored_writes:
             setattr(display, name, value)
 
 
 class FakeRunner:
     """Fake ``Runner``: records every argv, answers like ``ddcutil`` does."""
 
-    VCP_ATTRIBUTES = {0x10: "backlight", 0x12: "contrast", 0x14: "preset", 0x87: "sharpness", 0xCC: "language"}
+    VCP_ATTRIBUTES = {
+        0x10: "backlight",
+        0x12: "contrast",
+        0x14: "preset",
+        0x87: "sharpness",
+        0xCC: "language",
+        0xD6: "power_mode",
+    }
     CONTINUOUS_MAXIMUM = {0x10: 100, 0x12: 100, 0x16: 255, 0x18: 255, 0x1A: 255, 0x87: 4}
 
     def __init__(self, display: FakeDisplay) -> None:
@@ -175,6 +195,8 @@ class FakeRunner:
         if arguments[:3] == ["ddcutil", "detect", "--brief"]:
             return CommandResult(0, self.display.detect_text(), "")
         if "getvcp" in arguments:
+            if not self.display.ddc_answers:
+                return CommandResult(1, "", "DDC communication failed")
             codes = [int(code, 16) for code in arguments[arguments.index("getvcp") + 1 :]]
             return CommandResult(0, "".join(self._vcp_line(code) for code in codes), "")
         if "setvcp" in arguments:
@@ -182,10 +204,22 @@ class FakeRunner:
                 hook()
             code, value = arguments[-2], int(arguments[-1])
             attribute = self.VCP_ATTRIBUTES.get(int(code, 16))
-            if attribute is not None and attribute not in self.display.ignored_writes:
-                setattr(self.display, attribute, value)
+            if attribute is not None:
+                self.display.writes.append((attribute, value))
+                if attribute not in self.display.ignored_writes:
+                    self._store(attribute, value)
             return CommandResult(0, "Setting VCP feature trace line\nVCP trace line\n", "")
         return CommandResult(1, "", "unexpected fake command")
+
+    def _store(self, attribute: str, value: int) -> None:
+        display = self.display
+        if attribute == "power_mode":
+            display.power_mode = display.blank_reading if value == 5 else value
+            display.ddc_answers = not (value == 5 and display.silent_after_blank)
+            return
+        setattr(display, attribute, value)
+        if attribute == "preset" and value in display.preset_gains:
+            display.red, display.green, display.blue = display.preset_gains[value]
 
     def _vcp_line(self, code: int) -> str:
         display = self.display
@@ -195,6 +229,6 @@ class FakeRunner:
         value = getattr(display, attribute)
         if code == 0x14:
             return f"VCP {code:02X} CNC x00 x0b x00 x{value:02x}\n"
-        if code == 0xCC:
+        if code in (0xCC, 0xD6):
             return f"VCP {code:02X} SNC x{value:02x}\n"
         return f"VCP {code:02X} C {value} {self.CONTINUOUS_MAXIMUM[code]}\n"

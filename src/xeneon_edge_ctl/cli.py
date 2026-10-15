@@ -14,14 +14,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, TextIO
 
-from xeneon_edge_ctl import __version__, lock, state
+from xeneon_edge_ctl import __version__, lock, power, state
 from xeneon_edge_ctl.errors import EXIT_OK, UsageError, XeneonError
 from xeneon_edge_ctl.model import SETTINGS, Setting, find_setting, format_value, parse_value
 from xeneon_edge_ctl.transport.ddc import DdcTransport, Runner, subprocess_runner
 from xeneon_edge_ctl.transport.hid import DEV_ROOT, SYSFS_ROOT, DevHidIo, HidIo, HidTransport
 
 PROG = "xeneon-edge-ctl"
-COMMANDS = ("status", "get", "set")
+COMMANDS = ("status", "get", "set", "blank", "unblank")
 
 
 @dataclass
@@ -105,6 +105,12 @@ def build_parser(settings: Sequence[Setting]) -> argparse.ArgumentParser:
     set_.add_argument("setting", help=f"one of: {names}")
     set_.add_argument("value", help="number; for preset and language a name or a raw value like 0x0b")
     _add_common_options(set_, after_command=True)
+
+    blank = commands.add_parser("blank", help="switch the picture off over VCP 0xD6 (see docs/design.md#safety)")
+    _add_common_options(blank, after_command=True)
+
+    unblank = commands.add_parser("unblank", help="switch the picture back on over VCP 0xD6")
+    _add_common_options(unblank, after_command=True)
     return parser
 
 
@@ -156,7 +162,25 @@ def _run_set(args: argparse.Namespace, environment: Environment) -> Outcome:
     return Outcome({"setting": setting.name, "value": read_back}, text)
 
 
-HANDLERS = {"status": _run_status, "get": _run_get, "set": _run_set}
+def _run_blank(args: argparse.Namespace, environment: Environment) -> Outcome:
+    with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
+        reading = power.blank(_open_device(environment, args.ddc_bus))
+    return Outcome({"blanked": True, "power_mode": reading}, f"display blanked (VCP 0xD6 reads {reading:02x})")
+
+
+def _run_unblank(args: argparse.Namespace, environment: Environment) -> Outcome:
+    with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
+        reading = power.unblank(_open_device(environment, args.ddc_bus))
+    return Outcome({"blanked": False, "power_mode": reading}, f"display on (VCP 0xD6 reads {reading:02x})")
+
+
+HANDLERS = {
+    "status": _run_status,
+    "get": _run_get,
+    "set": _run_set,
+    "blank": _run_blank,
+    "unblank": _run_unblank,
+}
 
 
 def _report_success(environment: Environment, command: str, outcome: Outcome, as_json: bool) -> None:

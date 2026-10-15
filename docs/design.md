@@ -1,6 +1,6 @@
 # Design
 
-Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`. Not yet implemented: profiles, `blank`/`unblank`, OSD navigation.
+Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`. Not yet implemented: OSD navigation.
 
 ## Contents
 
@@ -77,8 +77,9 @@ Dependencies point downwards; only `cli` knows about argument parsing and
 output formats.
 
 ```text
-cli ──► profile ──► state ──► model ──► transport.hid
-   └──► lock                         └► transport.ddc
+cli ──► apply ──► profile ──► state ──► model ──► transport.hid
+   ├──► power ─────────────────┘                └► transport.ddc
+   └──► lock
 osd (later) ──► transport.hid
 ```
 
@@ -89,7 +90,10 @@ osd (later) ──► transport.hid
 - `model`: the table above as data — which channel writes and reads each
   setting, its range, and whether a write can be verified.
 - `state`: reads settings from the device; never caches.
-- `profile`: saves and applies profiles (see [Profiles](#profiles)).
+- `profile`: stores, lists and validates profile files (see [Profiles](#profiles)).
+- `apply`: writes a profile to the display in a fixed order and keeps the journal
+  of the last apply.
+- `power`: `blank` and `unblank` over VCP `0xD6` (see [Safety](#safety)).
 - `lock`: the single-writer lock (see [Single writer](#single-writer)).
 - `cli`: commands, `--json` output, exit codes.
 
@@ -114,7 +118,8 @@ Command name: `xeneon-edge-ctl`.
 ```
 
 On failure `ok` is `false`, `data` is `null` and `error` holds `code` and
-`message`. The JSON shape of every command is fixed by golden tests.
+`message`. For the profile commands `command` names the action, for example
+`profile save`. The JSON shape of every command is fixed by golden tests.
 
 | Exit code | Meaning |
 |---|---|
@@ -148,6 +153,23 @@ belong to the active preset (see [Settings](#settings-in-version-01)). It writes
 back, and reports each failed value instead of stopping silently. A journal of
 the last apply records what was written and read.
 
+Details of the implementation:
+
+- Names are 1 to 64 letters, digits, `-` or `_`; anything else is a usage error
+  (exit 2), so a name cannot leave the profiles directory. `profile save` refuses
+  an existing profile unless `--force` is given.
+- A profile file is validated completely (version, known setting names, whole
+  numbers in range, class `verified`) before the first write; a problem is a
+  usage error. A profile may hold a subset of the settings.
+- `profile apply` reads the device first and skips values that already match. The
+  gains are compared after the preset step, because a preset write can change
+  them. Exit code 6 when a value differs after the write, 5 on an I/O error (5
+  wins when both occur), 7 when the lock is busy.
+- The journal is `$XDG_STATE_HOME/corsair-xeneon-edge-ctl/last-apply.json`
+  (`~/.local/state` when unset). Its directory is created before the first write.
+  `profile list` and `profile show` read files only; `profile save` reads the
+  device and takes no lock, because it writes nothing to the display.
+
 ## Safety
 
 The Xeneon Edge has no buttons. A command that switches it off or resets it can
@@ -159,15 +181,19 @@ only be undone through software or by unplugging it. The tool therefore refuses:
 | OSD entry "Reset" | factory reset; also the neighbour of "Language" in the menu, so the tool sets the language over DDC/CI only |
 | VCP `0x04`, `0x05`, `0x06`, `0x08` | MCCS "restore factory defaults" family |
 | VCP `0x60` | input source; no tested way back |
+| VCP `0xD6` with any value but `01` and `05` | only these two are measured; the transport checks the value, not only the code |
 
 Each refusal has a test that sends the command through the public interface and
 checks that nothing reaches the transport.
 
-`blank` writes VCP `0xD6` = `05`. In one test on a DisplayPort connection the
+`blank` writes VCP `0xD6` = `05` under the writer lock. In one test on a DisplayPort connection the
 display went dark, kept answering DDC/CI (reading `0xD6` = `04`), and `0xD6` = `01` brought
 the picture back. `blank` reads `0xD6` afterwards; if DDC/CI no longer answers,
-it sends `01` immediately and fails with exit code 5. The way back over a
-USB-C (DisplayPort Alt Mode) connection is not tested yet.
+it sends `01` immediately and fails with exit code 5, with a message that the
+display may need a power cycle. A reading that is not `04` or `05` exits with
+code 6 without a recovery write. `unblank` writes `01` and exits with code 6
+unless it reads back `01`. The way back over a USB-C (DisplayPort Alt Mode)
+connection is not tested yet; the tool does not detect the connector.
 
 ## Testing and acceptance
 

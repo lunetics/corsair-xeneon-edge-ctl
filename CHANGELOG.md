@@ -21,3 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the VCP codes `0x04`, `0x05`, `0x06`, `0x08` and `0x60`.
 - Single-writer lock on `$XDG_RUNTIME_DIR/xeneon-edge.lock`; a busy lock exits
   with code 7.
+- Commands `profile save`, `profile apply`, `profile list` and `profile show`.
+  Profiles are JSON files in `$XDG_CONFIG_HOME/corsair-xeneon-edge-ctl/profiles/`;
+  `apply` validates the file first, writes preset, gains, then the rest under the
+  writer lock, skips matching values, reads every value back, reports every
+  failure and writes a journal to
+  `$XDG_STATE_HOME/corsair-xeneon-edge-ctl/last-apply.json`.
+- Commands `blank` and `unblank` (VCP `0xD6` = `05` / `01`). `blank` reads the
+  power mode back and writes `01` at once if DDC/CI stops answering. The way back
+  over USB-C (DisplayPort Alt Mode) is untested and documented as a limitation.
+- The DDC/CI transport writes VCP `0xD6` only with the values `01` and `05`.

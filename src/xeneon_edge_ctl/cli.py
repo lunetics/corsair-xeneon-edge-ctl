@@ -14,14 +14,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, TextIO
 
-from xeneon_edge_ctl import __version__, lock, power, state
+from xeneon_edge_ctl import __version__, lock, power, profile, state
 from xeneon_edge_ctl.errors import EXIT_OK, UsageError, XeneonError
 from xeneon_edge_ctl.model import SETTINGS, Setting, find_setting, format_value, parse_value
 from xeneon_edge_ctl.transport.ddc import DdcTransport, Runner, subprocess_runner
 from xeneon_edge_ctl.transport.hid import DEV_ROOT, SYSFS_ROOT, DevHidIo, HidIo, HidTransport
 
 PROG = "xeneon-edge-ctl"
-COMMANDS = ("status", "get", "set", "blank", "unblank")
+COMMANDS = ("status", "get", "set", "profile", "blank", "unblank")
 
 
 @dataclass
@@ -106,6 +106,18 @@ def build_parser(settings: Sequence[Setting]) -> argparse.ArgumentParser:
     set_.add_argument("value", help="number; for preset and language a name or a raw value like 0x0b")
     _add_common_options(set_, after_command=True)
 
+    profile_ = commands.add_parser("profile", help="save, list and show profiles")
+    actions = profile_.add_subparsers(dest="profile_action", required=True, parser_class=_ArgumentParser, metavar="action")
+    save = actions.add_parser("save", help="store the current settings of the display as a profile")
+    save.add_argument("name", help="letters, digits, '-' and '_' (1 to 64 characters)")
+    save.add_argument("--force", action="store_true", help="overwrite an existing profile")
+    _add_common_options(save, after_command=True)
+    list_ = actions.add_parser("list", help="list the stored profiles")
+    _add_common_options(list_, after_command=True)
+    show = actions.add_parser("show", help="print a stored profile")
+    show.add_argument("name", help="the profile name")
+    _add_common_options(show, after_command=True)
+
     blank = commands.add_parser("blank", help="switch the picture off over VCP 0xD6 (see docs/design.md#safety)")
     _add_common_options(blank, after_command=True)
 
@@ -162,6 +174,34 @@ def _run_set(args: argparse.Namespace, environment: Environment) -> Outcome:
     return Outcome({"setting": setting.name, "value": read_back}, text)
 
 
+def _profile_lines(stored: profile.Profile, settings: Sequence[Setting]) -> list[str]:
+    shown = [(find_setting(settings, name), value) for name, value in stored.values.items()]
+    name_width = max(len(setting.name) for setting, _ in shown)
+    value_width = max(len(format_value(setting, value)) for setting, value in shown)
+    return [
+        f"{setting.name:<{name_width}}  {format_value(setting, value):<{value_width}}  {profile.CLASS_VERIFIED}"
+        for setting, value in shown
+    ]
+
+
+def _run_profile_save(args: argparse.Namespace, environment: Environment) -> Outcome:
+    # Name and target are checked before the display is read; saving only reads, so it takes no lock.
+    profile.ensure_can_save(environment.env, args.name, force=args.force)
+    stored = profile.capture_profile(_open_device(environment, args.ddc_bus), environment.settings, args.name)
+    path = profile.save_profile(environment.env, stored, force=args.force)
+    return Outcome(stored.to_data(), f"saved profile {stored.name!r} to {path}")
+
+
+def _run_profile_list(args: argparse.Namespace, environment: Environment) -> Outcome:
+    names = profile.list_profiles(environment.env)
+    return Outcome({"profiles": names}, "\n".join(names) if names else "no profiles stored")
+
+
+def _run_profile_show(args: argparse.Namespace, environment: Environment) -> Outcome:
+    stored = profile.load_profile(environment.env, environment.settings, args.name)
+    return Outcome(stored.to_data(), "\n".join([f"Profile {stored.name}", *_profile_lines(stored, environment.settings)]))
+
+
 def _run_blank(args: argparse.Namespace, environment: Environment) -> Outcome:
     with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
         reading = power.blank(_open_device(environment, args.ddc_bus))
@@ -178,6 +218,9 @@ HANDLERS = {
     "status": _run_status,
     "get": _run_get,
     "set": _run_set,
+    "profile save": _run_profile_save,
+    "profile list": _run_profile_list,
+    "profile show": _run_profile_show,
     "blank": _run_blank,
     "unblank": _run_unblank,
 }
@@ -200,6 +243,11 @@ def _report_failure(environment: Environment, command: str | None, error: Xeneon
     return error.exit_code
 
 
+def _command_name(args: argparse.Namespace) -> str:
+    """``get``, ``set``, ... ; ``profile save`` for a profile action. Used for dispatch and in the JSON."""
+    return f"profile {args.profile_action}" if args.command == "profile" else str(args.command)
+
+
 def run(argv: Sequence[str], environment: Environment) -> int:
     """Run one command and return the process exit code."""
     arguments = list(argv)
@@ -210,14 +258,15 @@ def run(argv: Sequence[str], environment: Environment) -> int:
     except UsageError as error:
         command = next((argument for argument in arguments if argument in COMMANDS), None)
         return _report_failure(environment, command, error, "--json" in arguments)
+    command = _command_name(args)
     try:
-        outcome = HANDLERS[args.command](args, environment)
+        outcome = HANDLERS[command](args, environment)
     except XeneonError as error:
-        return _report_failure(environment, args.command, error, args.json)
+        return _report_failure(environment, command, error, args.json)
     except Exception as exc:  # noqa: BLE001 - last resort: report, never a traceback in --json mode
         failure = XeneonError(f"{type(exc).__name__}: {exc}")
-        return _report_failure(environment, args.command, failure, args.json)
-    _report_success(environment, args.command, outcome, args.json)
+        return _report_failure(environment, command, failure, args.json)
+    _report_success(environment, command, outcome, args.json)
     return EXIT_OK
 
 

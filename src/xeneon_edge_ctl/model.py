@@ -96,7 +96,8 @@ def find_setting(settings: Sequence[Setting], name: str) -> Setting:
     raise UsageError(f"unknown setting {name!r} (valid: {valid})")
 
 
-def _check_range(setting: Setting, value: int) -> int:
+def check_range(setting: Setting, value: int) -> int:
+    """The value if it lies in the range of the setting, else a usage error."""
     if not setting.minimum <= value <= setting.maximum:
         raise UsageError(f"{setting.name} must be between {setting.minimum} and {setting.maximum}, got {value}")
     return value
@@ -111,10 +112,10 @@ def parse_value(setting: Setting, text: str) -> int:
         hex_match = HEX.fullmatch(text)
         if hex_match is None:
             raise UsageError(f"{setting.name} takes a name ({known}) or a raw value written as 0x.., got {text!r}")
-        return _check_range(setting, int(hex_match.group(1), 16))
+        return check_range(setting, int(hex_match.group(1), 16))
     if DECIMAL.fullmatch(text) is None or not text.isascii():
         raise UsageError(f"{setting.name} takes a whole number from {setting.minimum} to {setting.maximum}, got {text!r}")
-    return _check_range(setting, int(text))
+    return check_range(setting, int(text))
 
 
 def format_value(setting: Setting, value: int) -> str:

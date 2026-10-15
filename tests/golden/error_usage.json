@@ -1,0 +1,1 @@
+{"ok": false, "command": "set", "data": null, "error": {"code": "usage", "message": "contrast must be between 0 and 100, got 101"}}

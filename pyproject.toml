@@ -20,6 +20,9 @@ classifiers = [
     "Topic :: System :: Hardware",
 ]
 
+[project.scripts]
+xeneon-edge-ctl = "xeneon_edge_ctl.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/lunetics/corsair-xeneon-edge-ctl"
 Changelog = "https://github.com/lunetics/corsair-xeneon-edge-ctl/blob/main/CHANGELOG.md"

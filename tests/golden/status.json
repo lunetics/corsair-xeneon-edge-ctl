@@ -1,0 +1,1 @@
+{"ok": true, "command": "status", "data": {"hid_node": "/dev/hidraw3", "ddc_bus": 17, "firmware": "20250714V1", "settings": {"backlight": 51, "contrast": 50, "brightness": 50, "sharpness": 2, "preset": 11, "language": 2, "red": 128, "green": 97, "blue": 80}, "stored_user_gains": {"red": 128, "green": 97, "blue": 80}}, "error": null}

@@ -28,7 +28,12 @@ FORBIDDEN_VCP = {
 
 # Codes the tool writes. The RGB gains (0x16, 0x18, 0x1A) are deliberately absent:
 # DDC/CI writes them in percent, so only HID can set them exactly.
-WRITABLE_VCP = frozenset({0x10, 0x12, 0x14, 0x87, 0xCC})
+WRITABLE_VCP = frozenset({0x10, 0x12, 0x14, 0x87, 0xCC, 0xD6})
+
+# Codes that may only carry certain values. Power mode (0xD6) is the one code
+# where most values are unmeasured: 01 is "on" and 05 darkened the display while
+# DDC/CI kept answering (one DisplayPort test); anything else is refused.
+ALLOWED_VCP_VALUES = {0xD6: frozenset({0x01, 0x05})}
 
 MAX_VCP_VALUE = 0xFFFF
 
@@ -197,6 +202,10 @@ class DdcTransport:
             raise RefusedError(f"VCP 0x{code:02x} is not on the write allowlist")
         if not 0 <= value <= MAX_VCP_VALUE:
             raise RefusedError(f"VCP value {value} does not fit in 16 bits")
+        allowed_values = ALLOWED_VCP_VALUES.get(code)
+        if allowed_values is not None and value not in allowed_values:
+            listed = ", ".join(f"{allowed:02x}" for allowed in sorted(allowed_values))
+            raise RefusedError(f"VCP 0x{code:02x} accepts only the values {listed}, not {value:02x}")
         bus = self.resolve_bus()
         argv = ["ddcutil", "--bus", str(bus), "--noverify", "setvcp", f"{code:02X}", str(value)]
         result = self.runner(argv, VCP_TIMEOUT_S)

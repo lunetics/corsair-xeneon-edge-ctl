@@ -234,10 +234,30 @@ class VcpSafetyTests(SafeTestCase):
         self.assertEqual(self.runner.calls, [])
 
     def test_unlisted_codes_cannot_be_written(self) -> None:
-        for code in (0xD6, 0x00, 0xFF, 0x52):
+        for code in (0xD7, 0x00, 0xFF, 0x52):
             with self.subTest(code=code):
                 with self.assertRaises(RefusedError):
                     self.transport.set_vcp(code, 1)
+        self.assertEqual(self.runner.calls, [])
+
+    def test_power_mode_d6_accepts_only_the_values_01_and_05(self) -> None:
+        for value in (0x00, 0x02, 0x03, 0x04, 0x06, 0x0B, 0xFF, 0x0101, 0x0105, 0xFFFF):
+            with self.subTest(value=value):
+                with self.assertRaises(RefusedError) as caught:
+                    self.transport.set_vcp(0xD6, value)
+                self.assertEqual(caught.exception.exit_code, 3)
+        self.assertEqual(self.runner.calls, [])
+
+    def test_power_mode_d6_writes_01_and_05(self) -> None:
+        for value in (0x01, 0x05):
+            self.transport.set_vcp(0xD6, value)
+        self.assertEqual([call[-2:] for call in self.runner.setvcp_calls], [["D6", "1"], ["D6", "5"]])
+
+    def test_the_value_guard_of_d6_does_not_widen_other_codes(self) -> None:
+        with self.assertRaises(RefusedError):
+            self.transport.set_vcp(0xD7, 5)
+        with self.assertRaises(RefusedError):
+            self.transport.set_vcp(0x04, 5)
         self.assertEqual(self.runner.calls, [])
 
     def test_value_must_fit_the_vcp_word(self) -> None:

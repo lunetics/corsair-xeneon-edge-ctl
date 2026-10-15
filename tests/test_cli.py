@@ -380,6 +380,12 @@ class SafetyThroughTheCliTests(CliTestCase):
         self.poison(model.DdcWrite(0x16))
         self.assert_refused_without_traffic("set", "poison", "50")
 
+    def test_power_mode_d6_with_a_value_other_than_01_and_05_is_refused(self) -> None:
+        for value in ("0", "2", "4", "255"):
+            with self.subTest(value=value):
+                self.poison(model.DdcWrite(0xD6))
+                self.assert_refused_without_traffic("set", "poison", value)
+
     def test_forbidden_vcp_cannot_be_read_either(self) -> None:
         self.poison(model.DdcWrite(0x10), model.DdcRead(0x60))
         self.assert_refused_without_traffic("get", "poison")

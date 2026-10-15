@@ -1,6 +1,6 @@
 # Design
 
-Status: draft for version 0.1. Nothing here is implemented yet.
+Status: accepted design for version 0.1. Nothing here is implemented yet.
 
 ## Contents
 

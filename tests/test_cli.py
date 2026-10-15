@@ -10,6 +10,7 @@ import sys
 import tomllib
 import unittest
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from support import CommandResult, FakeDisplay, FakeHidIo, FakeRunner, SafeTestCase, make_edge_sysfs
@@ -18,6 +19,7 @@ from xeneon_edge_ctl import cli, model
 
 ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = Path(__file__).resolve().parent / "golden"
+FIXED_TIME = datetime(2026, 10, 15, 12, 30, 0, tzinfo=UTC)
 
 
 class CliTestCase(SafeTestCase):
@@ -52,6 +54,7 @@ class CliTestCase(SafeTestCase):
             stderr=err,
             settings=self.settings,
             lock_timeout_s=self.LOCK_TIMEOUT_S,
+            clock=lambda: FIXED_TIME,
         )
         code = cli.run(list(argv), environment)
         return code, out.getvalue(), err.getvalue()

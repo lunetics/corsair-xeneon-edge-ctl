@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "profile": "work",
+  "time": "2026-10-15T12:30:00+00:00",
+  "result": "ok",
+  "error": null,
+  "settings": [
+    {"setting": "preset", "wanted": 11, "read": 11, "written": false, "read_back": null, "status": "skipped", "error": null},
+    {"setting": "red", "wanted": 130, "read": 128, "written": true, "read_back": 130, "status": "written", "error": null},
+    {"setting": "green", "wanted": 97, "read": 97, "written": false, "read_back": null, "status": "skipped", "error": null},
+    {"setting": "backlight", "wanted": 60, "read": 51, "written": true, "read_back": 60, "status": "written", "error": null},
+    {"setting": "contrast", "wanted": 50, "read": 50, "written": false, "read_back": null, "status": "skipped", "error": null}
+  ]
+}

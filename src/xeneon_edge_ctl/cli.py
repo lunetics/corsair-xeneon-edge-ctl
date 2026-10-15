@@ -9,12 +9,13 @@ import argparse
 import json
 import os
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn, TextIO
 
-from xeneon_edge_ctl import __version__, lock, power, profile, state
+from xeneon_edge_ctl import __version__, apply, lock, power, profile, state
 from xeneon_edge_ctl.errors import EXIT_OK, UsageError, XeneonError
 from xeneon_edge_ctl.model import SETTINGS, Setting, find_setting, format_value, parse_value
 from xeneon_edge_ctl.transport.ddc import DdcTransport, Runner, subprocess_runner
@@ -22,6 +23,10 @@ from xeneon_edge_ctl.transport.hid import DEV_ROOT, SYSFS_ROOT, DevHidIo, HidIo,
 
 PROG = "xeneon-edge-ctl"
 COMMANDS = ("status", "get", "set", "profile", "blank", "unblank")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 @dataclass
@@ -37,6 +42,7 @@ class Environment:
     stderr: TextIO
     settings: Sequence[Setting] = SETTINGS
     lock_timeout_s: float = lock.DEFAULT_TIMEOUT_S
+    clock: Callable[[], datetime] = _utc_now
 
 
 def default_environment() -> Environment:
@@ -114,6 +120,9 @@ def build_parser(settings: Sequence[Setting]) -> argparse.ArgumentParser:
     _add_common_options(save, after_command=True)
     list_ = actions.add_parser("list", help="list the stored profiles")
     _add_common_options(list_, after_command=True)
+    apply_ = actions.add_parser("apply", help="write a stored profile to the display and verify it")
+    apply_.add_argument("name", help="the profile name")
+    _add_common_options(apply_, after_command=True)
     show = actions.add_parser("show", help="print a stored profile")
     show.add_argument("name", help="the profile name")
     _add_common_options(show, after_command=True)
@@ -192,6 +201,29 @@ def _run_profile_save(args: argparse.Namespace, environment: Environment) -> Out
     return Outcome(stored.to_data(), f"saved profile {stored.name!r} to {path}")
 
 
+def _run_profile_apply(args: argparse.Namespace, environment: Environment) -> Outcome:
+    # Everything that can be checked without touching the display comes first: the profile
+    # file (usage errors), the journal location (so no value is written without a journal).
+    stored = profile.load_profile(environment.env, environment.settings, args.name)
+    journal = profile.journal_path(environment.env)
+    profile.prepare_journal(journal)
+    with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
+        report = apply.apply_profile(_open_device(environment, args.ddc_bus), environment.settings, stored)
+        apply.write_journal(journal, report, environment.clock())
+    failure = report.failure()
+    if failure is not None:
+        raise failure
+    width = max(len(entry.setting) for entry in report.entries)
+    lines = [
+        f"profile {stored.name!r} applied: {report.count(apply.STATUS_WRITTEN)} written, {report.count(apply.STATUS_SKIPPED)} skipped"
+    ]
+    for entry in report.entries:
+        setting = find_setting(environment.settings, entry.setting)
+        lines.append(f"{entry.setting:<{width}}  {entry.status:<7}  {format_value(setting, entry.wanted)}")
+    lines.append(f"journal: {journal}")
+    return Outcome(report.to_data(), "\n".join(lines))
+
+
 def _run_profile_list(args: argparse.Namespace, environment: Environment) -> Outcome:
     names = profile.list_profiles(environment.env)
     return Outcome({"profiles": names}, "\n".join(names) if names else "no profiles stored")
@@ -219,6 +251,7 @@ HANDLERS = {
     "get": _run_get,
     "set": _run_set,
     "profile save": _run_profile_save,
+    "profile apply": _run_profile_apply,
     "profile list": _run_profile_list,
     "profile show": _run_profile_show,
     "blank": _run_blank,

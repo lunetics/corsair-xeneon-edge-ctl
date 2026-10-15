@@ -1,0 +1,1 @@
+{"ok": true, "command": "profile apply", "data": {"profile": "work", "settings": {"preset": {"status": "skipped", "value": 11}, "red": {"status": "written", "value": 130}, "green": {"status": "skipped", "value": 97}, "backlight": {"status": "written", "value": 60}, "contrast": {"status": "skipped", "value": 50}}}, "error": null}

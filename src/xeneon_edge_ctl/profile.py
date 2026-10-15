@@ -185,6 +185,14 @@ def write_text_atomic(path: Path, text: str, *, replace: bool) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+def prepare_journal(path: Path) -> None:
+    """Create the journal directory before anything is written to the display."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise TransportError(f"cannot create the directory of the journal {path}: {exc}") from None
+
+
 def capture_profile(device: state.Device, settings: Sequence[Setting], name: str) -> Profile:
     """Read every verifiable setting from the device."""
     wanted = [setting for setting in settings if setting.verifiable]

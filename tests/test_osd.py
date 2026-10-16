@@ -339,6 +339,34 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(caught.exception.exit_code, 3)
         self.assertIn("--confirm-reset", str(caught.exception))
 
+    def test_a_missing_confirmation_is_told_apart_from_other_refusals_by_its_type(self) -> None:
+        needs_confirmation = (
+            self.fresh(Level.ENTRIES, MISC, RESET, reset_touched=True),  # select on Reset
+            self.fresh(Level.ENTRIES, MISC, 0, reset_touched=True),  # select in Misc after a touch
+            self.fresh(Level.PAGES, MISC, reset_touched=True),
+        )
+        for state in needs_confirmation:
+            with self.subTest(state=state), self.assertRaises(osd.ConfirmationRequiredError) as caught:
+                self.plan(state, Key.SELECT)
+            self.assertIsInstance(caught.exception, RefusedError)
+            self.assertEqual((caught.exception.exit_code, caught.exception.code), (3, "refused"))
+        other_refusals = (
+            (OsdState(unknown_reason="no state file"), Key.SELECT),  # unknown state, even where a select needs confirmation
+            (self.fresh(Level.ENTRIES, MISC, RESET, reset_touched=True, unknown_reason=osd.REASON_RESET), Key.SELECT),
+            (OsdState(), Key.LEFT),  # closed menu
+            (at(Level.ENTRIES, PICTURE, 0, last_key_time=NOW - timedelta(seconds=9)), Key.RIGHT),  # stale
+        )
+        for state, key in other_refusals:
+            with self.subTest(state=state, key=key), self.assertRaises(RefusedError) as caught:
+                self.plan(state, key)
+            self.assertNotIsInstance(caught.exception, osd.ConfirmationRequiredError)
+
+    def test_a_repeated_confirmed_reset_is_not_a_missing_confirmation(self) -> None:
+        on_reset = self.fresh(Level.ENTRIES, MISC, RESET, reset_touched=True)
+        with self.assertRaises(RefusedError) as caught:
+            self.plan(on_reset, Key.SELECT, repeat=2, confirm_reset=True)
+        self.assertNotIsInstance(caught.exception, osd.ConfirmationRequiredError)
+
     def test_select_on_reset_with_the_confirmation_is_planned_and_leaves_the_state_unknown(self) -> None:
         on_reset = self.fresh(Level.ENTRIES, MISC, RESET, reset_touched=True)
         plan = self.plan(on_reset, Key.SELECT, confirm_reset=True)

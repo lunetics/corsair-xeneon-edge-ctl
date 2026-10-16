@@ -264,14 +264,24 @@ CONFIRM_HINT = "only a person may pass --confirm-reset, never an automated task"
 WARNING_ON_RESET = "the cursor is on Reset; 'select' there needs --confirm-reset and resets the display"
 
 
+class ConfirmationRequiredError(RefusedError):
+    """A ``select`` was refused only because ``--confirm-reset`` is missing.
+
+    Callers that can ask a person (``osd interactive``) tell this refusal apart from every other one
+    by its type, never by its message. It is still a ``RefusedError``: exit code 3, nothing sent.
+    """
+
+
 def _require_confirmation(state: OsdState, key: Key, confirm_reset: bool, position: str) -> None:
     """Refuse a ``select`` that could trigger Reset unless ``--confirm-reset`` is given."""
     if key is not Key.SELECT or not state.in_misc or confirm_reset:
         return
     if state.on_reset:
-        raise RefusedError(f"{position}: select on Reset is refused without --confirm-reset; nothing was sent ({CONFIRM_HINT})")
+        raise ConfirmationRequiredError(
+            f"{position}: select on Reset is refused without --confirm-reset; nothing was sent ({CONFIRM_HINT})"
+        )
     if state.reset_touched:
-        raise RefusedError(
+        raise ConfirmationRequiredError(
             f"{position}: the cursor has been on Reset since the menu was opened, and a lost key press could leave "
             "the real cursor there; every select in Misc needs --confirm-reset until 'osd open' or 'osd close'. "
             f"Nothing was sent ({CONFIRM_HINT})"

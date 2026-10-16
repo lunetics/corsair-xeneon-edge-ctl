@@ -48,10 +48,12 @@ The options work before or after the command.
 | `osd key <key> [--repeat N] [--confirm-reset]` | Press one OSD key once or `N` times. |
 | `osd where` | Print the tracked state of the on-screen menu. Reads one file; no device access, no lock. |
 | `osd close` | Close the on-screen menu. |
+| `osd interactive [--dcr on\|off]` | Work the on-screen menu with single key presses from the terminal, see [Interactive mode](#interactive-mode). Needs a terminal; no `--json`. |
 
 Commands that write (`set`, `profile apply`, `blank`, `unblank`, `osd open`,
 `osd key`, `osd close`) take an exclusive lock on `$XDG_RUNTIME_DIR/xeneon-edge.lock`. If another writer holds
-it, the command exits with code 7 after about two seconds.
+it, the command exits with code 7 after about two seconds. `osd interactive`
+takes the lock for each key press, not for the session.
 
 ## Settings
 
@@ -111,6 +113,7 @@ xeneon-edge-ctl osd key right --repeat 2
 xeneon-edge-ctl osd key select
 xeneon-edge-ctl osd where
 xeneon-edge-ctl osd close
+xeneon-edge-ctl osd interactive
 ```
 
 ### Keys
@@ -178,6 +181,55 @@ resets, and whether the display still answers afterwards, is not measured.
   `osd close`.
 - After a confirmed Reset the state is unknown; `osd open` or `osd close` start
   over.
+
+### Interactive mode
+
+`osd interactive [--dcr on|off]` reads single key presses from the terminal and
+turns each into one `osd` action, so you can work the menu without typing a
+command per key. It uses the same state file, planning, writer lock and Reset
+rules as `osd open`, `osd key` and `osd close`; the lock is taken for each key
+press, so another command can run between two presses.
+
+| Terminal key | Action |
+|---|---|
+| Left arrow, right arrow | `osd key left`, `osd key right` |
+| Enter | `osd key select` |
+| Escape, Backspace | `osd key back` |
+| `o` | `osd open`, with the `--dcr` value the mode was started with (default `off`) |
+| `q` | `osd close`, then leave the mode (exit code 0). If the close fails, the error is shown and the mode keeps running. |
+| Ctrl-C | Leave the mode without sending a key (exit code 0). |
+
+Every other key is ignored: the up and down arrows, other letters (also `Q` and
+`O`), Alt combinations and sequences the tool does not know.
+
+- It needs a terminal. When stdin or stdout is not a terminal, or with `--json`,
+  it exits with code 2 and does nothing.
+- It sends no key on start. A status line shows the tracked position (page,
+  entry, `(editing)`), the DCR assumption and, when the cursor is on Reset or has
+  been on it since the menu was opened, a warning. The line is redrawn after
+  every action, and by itself when the tracked position stops being trustworthy
+  (the last key is more than 8 seconds old); then it says so and `o` starts over.
+- A refused action sends nothing and shows the reason in the status line. An
+  error that is not a refusal (I/O, display not found, busy lock) is shown the
+  same way. The mode keeps running in both cases.
+- `Enter` where `osd key select` would need `--confirm-reset` asks: "Reset the
+  display? Type RESET and press Enter to send, anything else cancels." Only the
+  exact text `RESET` sends the key with the confirmation; anything else, an empty
+  line or Ctrl-D cancels and sends nothing. The 8-second rule applies when the
+  answer arrives. Typing `RESET` is the same decision as `--confirm-reset`: do it
+  by hand only, never from a script or an automated task.
+- Escape and the arrow keys start with the same byte, so a lone Escape is
+  recognised when no further byte arrives within 50 ms.
+- The terminal settings are restored when the mode ends, also after an error or
+  Ctrl-C. Keys typed ahead before the mode starts, or before and during the Reset
+  question, are dropped and never send a key. If the terminal goes away, the mode
+  ends without sending a key and exits with code 0.
+
+```text
+$ xeneon-edge-ctl osd interactive
+Left/Right arrows move, Enter selects, Esc or Backspace goes back, o opens the menu, q closes it and quits, Ctrl-C quits without sending a key.
+menu: Misc > Reset | DCR assumed: off | WARNING: the cursor is on Reset; Enter there needs a typed confirmation and resets the display
+```
 
 ### Output
 

@@ -11,7 +11,8 @@ are trademarks of their respective owners.
 ## Status
 
 Pre-release. `status`, `get`, `set`, the `profile` commands,
-`blank`/`unblank` and the `osd` commands for the on-screen menu keys work. The
+`blank`/`unblank` and the `osd` commands for the on-screen menu keys work,
+including `osd interactive` for arrow-key control from the terminal. The
 full design is in [docs/design.md](docs/design.md).
 
 ## Requirements
@@ -59,6 +60,7 @@ xeneon-edge-ctl blank
 xeneon-edge-ctl unblank
 xeneon-edge-ctl osd open
 xeneon-edge-ctl osd key right --repeat 2
+xeneon-edge-ctl osd interactive
 ```
 
 Every command that writes reads the value back and fails with exit code 6 on a

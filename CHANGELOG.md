@@ -40,4 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed press, a Reset). `select` on the menu entry Reset, and any `select` in
   Misc after the cursor has touched Reset, needs `--confirm-reset`. The HID
   allowlist admits exactly the four key frames.
+- Command `osd interactive` works the on-screen menu with single key presses from
+  the terminal: arrow keys, Enter (select), Escape or Backspace (back), `o` (open)
+  and `q` (close and leave). Every key goes through the same writer lock, state
+  file, planning and Reset rules as `osd key`, with the lock taken per key press.
+  A status line shows the tracked position, the DCR assumption and a Reset
+  warning; refusals and errors appear there and the mode keeps running. A select
+  that needs `--confirm-reset` asks first, and only the exact answer `RESET`
+  sends it. It exits with code 2 when stdin or stdout is not a terminal, and with
+  `--json`; Ctrl-C leaves without sending a key (exit code 0).
 - Runs on Python 3.11 or newer; CI runs the tests on 3.11 to 3.14.

@@ -1,6 +1,7 @@
 """Command line: commands, exit codes, JSON golden files, locking, safety through the CLI."""
 
 import contextlib
+import dataclasses
 import fcntl
 import io
 import json
@@ -44,7 +45,8 @@ class CliTestCase(SafeTestCase):
     def lock_file(self) -> Path:
         return self.tmp / "run" / "xeneon-edge.lock"
 
-    def invoke(self, *argv: str) -> tuple[int, str, str]:
+    def invoke(self, *argv: str, **overrides: object) -> tuple[int, str, str]:
+        """Run the CLI once; ``overrides`` replace fields of the ``Environment`` (stdin, terminal_factory, ...)."""
         out, err = io.StringIO(), io.StringIO()
         environment = cli.Environment(
             hid_io=self.io,
@@ -59,6 +61,7 @@ class CliTestCase(SafeTestCase):
             clock=lambda: self.now,
             sleep=self.sleeps.append,
         )
+        environment = dataclasses.replace(environment, **overrides)  # type: ignore[arg-type]
         code = cli.run(list(argv), environment)
         return code, out.getvalue(), err.getvalue()
 

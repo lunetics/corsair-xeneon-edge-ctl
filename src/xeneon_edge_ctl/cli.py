@@ -11,12 +11,12 @@ import os
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn, TextIO
 
-from xeneon_edge_ctl import __version__, apply, lock, osd, power, profile, state
+from xeneon_edge_ctl import __version__, apply, interactive, lock, osd, power, profile, state
 from xeneon_edge_ctl.errors import EXIT_OK, UsageError, XeneonError
 from xeneon_edge_ctl.model import SETTINGS, Setting, find_setting, format_value, parse_value
 from xeneon_edge_ctl.transport.ddc import DdcTransport, Runner, subprocess_runner
@@ -45,6 +45,10 @@ class Environment:
     lock_timeout_s: float = lock.DEFAULT_TIMEOUT_S
     clock: Callable[[], datetime] = _utc_now
     sleep: Callable[[float], None] = time.sleep
+    # Only ``osd interactive`` reads them: it needs a terminal on both ends, and builds the terminal
+    # adapter (modes, single-key reads) from the two streams.
+    stdin: TextIO = field(default_factory=lambda: sys.stdin)
+    terminal_factory: Callable[[TextIO, TextIO], interactive.Terminal] = interactive.open_terminal
 
 
 def default_environment() -> Environment:
@@ -57,6 +61,7 @@ def default_environment() -> Environment:
         env=os.environ,
         stdout=sys.stdout,
         stderr=sys.stderr,
+        stdin=sys.stdin,
     )
 
 
@@ -159,6 +164,16 @@ def build_parser(settings: Sequence[Setting]) -> argparse.ArgumentParser:
     _add_common_options(close, after_command=True)
     where = osd_actions.add_parser("where", help="print the tracked menu state; sends nothing and takes no lock")
     _add_common_options(where, after_command=True)
+    interactive_ = osd_actions.add_parser(
+        "interactive", help="work the menu with single key presses from the terminal (arrows, Enter, Esc, o, q)"
+    )
+    interactive_.add_argument(
+        "--dcr",
+        choices=("on", "off"),
+        default="off",
+        help="the DCR assumption for 'o' (open); DCR cannot be read from the display (default: off)",
+    )
+    _add_common_options(interactive_, after_command=True)
     return parser
 
 
@@ -385,6 +400,55 @@ def _run_osd_where(args: argparse.Namespace, environment: Environment) -> Outcom
     return Outcome(data, "\n".join(lines))
 
 
+class _CliMenu:
+    """The menu side of the interactive mode: the helpers behind ``osd open``, ``osd key`` and ``osd close``."""
+
+    def __init__(self, environment: Environment) -> None:
+        self.environment = environment
+        self.path = osd.state_path(environment.env)
+
+    def state(self) -> osd.OsdState:
+        return osd.load_state(self.path)
+
+    def now(self) -> datetime:
+        return self.environment.clock()
+
+    def press(self, key: osd.Key, confirm_reset: bool) -> osd.OsdState:
+        return _press_keys(self.environment, key, 1, confirm_reset)[1]
+
+    def open(self, dcr: bool) -> osd.OsdState:
+        return _open_menu(self.environment, dcr)
+
+    def close(self) -> osd.OsdState:
+        return _close_menu(self.environment)
+
+
+def _is_terminal(stream: TextIO) -> bool:
+    try:
+        return stream.isatty()
+    except (AttributeError, ValueError):  # no such method, or a closed stream
+        return False
+
+
+def _run_osd_interactive(args: argparse.Namespace, environment: Environment) -> Outcome:
+    # Everything that can be checked before the terminal is touched comes first: the output format,
+    # both ends being a terminal, and the runtime directory (the menu resolves the state file path from it,
+    # and the lock file lives in the same directory).
+    if args.json:
+        raise UsageError("osd interactive reads keys from a terminal and has no --json output")
+    if not (_is_terminal(environment.stdin) and _is_terminal(environment.stdout)):
+        raise UsageError("osd interactive needs a terminal: both stdin and stdout must be a terminal")
+    menu = _CliMenu(environment)
+    terminal = environment.terminal_factory(environment.stdin, environment.stdout)
+    result = interactive.run_session(terminal, menu, dcr=args.dcr == "on")
+    if result.ending is interactive.Ending.QUIT:
+        text = "menu closed; left the interactive mode"
+    else:
+        reason = "on Ctrl-C" if result.ending is interactive.Ending.INTERRUPTED else "because the terminal input ended"
+        text = f"left the interactive mode {reason}, no key sent for it; {_after_text(result.state)}"
+    return Outcome({}, text)
+
+
 HANDLERS = {
     "status": _run_status,
     "get": _run_get,
@@ -399,6 +463,7 @@ HANDLERS = {
     "osd key": _run_osd_key,
     "osd close": _run_osd_close,
     "osd where": _run_osd_where,
+    "osd interactive": _run_osd_interactive,
 }
 
 

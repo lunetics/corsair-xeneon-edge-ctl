@@ -357,3 +357,8 @@ class PosixTerminal:
     def restore(self) -> None:
         if self._saved is not None:
             termios.tcsetattr(self.input_fd, termios.TCSAFLUSH, self._saved)
+
+
+def open_terminal(stdin: TextIO, stdout: TextIO) -> PosixTerminal:
+    """The real terminal on the file descriptor of ``stdin``, writing to ``stdout``."""
+    return PosixTerminal(stdin.fileno(), stdout)

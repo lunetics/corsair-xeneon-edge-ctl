@@ -1,6 +1,6 @@
 # Design
 
-Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`, `osd open`/`key`/`where`/`close`. Not yet implemented: `osd interactive`. Settings that exist only in the on-screen menu follow in a later version.
+Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`, `osd open`/`key`/`where`/`close`/`interactive`. Settings that exist only in the on-screen menu follow in a later version.
 
 ## Contents
 
@@ -81,6 +81,7 @@ output formats.
 cli ──► apply ──► profile ──► state ──► model ──► transport.hid
    ├──► power ─────────────────┘                └► transport.ddc
    ├──► lock
+   ├──► interactive ──► osd
    └──► osd ──► transport.hid
 ```
 
@@ -98,6 +99,9 @@ cli ──► apply ──► profile ──► state ──► model ──► 
 - `lock`: the single-writer lock (see [Single writer](#single-writer)).
 - `osd`: the menu model, the tracked cursor state and the key planning (see
   [OSD key control](#osd-key-control)).
+- `interactive`: terminal key decoding, the session loop and the termios
+  adapter of `osd interactive` (see [Interactive mode](#interactive-mode)); it
+  reaches the display only through the menu object `cli` passes in.
 - `cli`: commands, `--json` output, exit codes.
 
 ## Command-line contract

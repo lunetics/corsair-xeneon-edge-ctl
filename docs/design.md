@@ -1,6 +1,6 @@
 # Design
 
-Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`, `osd open`/`key`/`where`/`close`. Settings that exist only in the on-screen menu follow in a later version.
+Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`, `osd open`/`key`/`where`/`close`. Not yet implemented: `osd interactive`. Settings that exist only in the on-screen menu follow in a later version.
 
 ## Contents
 
@@ -113,7 +113,7 @@ Command name: `xeneon-edge-ctl`.
 | `profile apply <name>` | write a profile in a fixed order and verify it |
 | `profile list` / `profile show <name>` | list or print stored profiles |
 | `blank` / `unblank` | power mode off/on via VCP `0xD6` (see [Safety](#safety)) |
-| `osd open` / `osd key` / `osd where` / `osd close` | work the on-screen menu (see [OSD key control](#osd-key-control)) |
+| `osd open` / `osd key` / `osd where` / `osd close` / `osd interactive` | work the on-screen menu (see [OSD key control](#osd-key-control)) |
 
 `--json` prints exactly one JSON object on stdout:
 
@@ -259,6 +259,40 @@ cursor has been on Reset, every `select` in the Misc page needs
 `--confirm-reset` until the next `osd open` or `osd close`. After a confirmed
 Reset the state is unknown.
 
+### Interactive mode
+
+`osd interactive [--dcr on|off]` reads single key presses from the terminal and
+turns each into one `osd` action, so the menu can be worked without typing a
+command per key. It uses the same state file, planning, lock and Reset rules as
+the single commands; the lock is taken for each key press, not for the session.
+
+| Terminal key | Action |
+|---|---|
+| Left arrow / right arrow | `osd key left` / `osd key right` |
+| Enter | `osd key select` |
+| Escape, Backspace | `osd key back` |
+| `o` | `osd open` (with the `--dcr` value the mode was started with) |
+| `q` | `osd close`, then leave the mode |
+| Ctrl-C | leave the mode without sending a key |
+
+- It needs a terminal: when stdin or stdout is not a terminal it exits with code
+  2. `--json` is a usage error for this command.
+- It does not send a key on start. A status line shows the tracked position
+  (page, entry, editing), the DCR assumption and, when the cursor is on Reset or
+  has been on it, a warning. The line is redrawn after every action.
+- A refused action (unknown state, closed-menu arrow, missing confirmation) sends
+  nothing and shows the reason in the status line; `o` recovers from an unknown
+  state. Other keys are ignored.
+- A `select` that needs `--confirm-reset` asks: "Reset the display? Type RESET
+  and press Enter to send, anything else cancels." Only the exact text `RESET`
+  sends the key with the confirmation. The 8 s rule still applies when the
+  answer arrives.
+- An error that is not a refusal (I/O, display not found, busy lock) is shown in
+  the status line; the mode keeps running. The terminal settings are restored on
+  every way out, including errors and Ctrl-C.
+- Escape and the arrow keys share their first byte. A lone Escape is recognised
+  when no further byte follows within 50 ms.
+
 ## Safety
 
 The Xeneon Edge has no buttons. A command that switches it off or resets it can
@@ -302,4 +336,7 @@ connection is not tested yet; the tool does not detect the connector.
     value read over DDC/CI stays unchanged), the tracked state matches the
     screen, a key after more than 8 s is refused, `select` on Reset without
     `--confirm-reset` sends nothing. `--confirm-reset` is never used in
-    acceptance.
+    acceptance;
+  - `osd interactive`: the same walk with the terminal keys, `q` closes the
+    menu, the terminal works normally afterwards. The Reset question is
+    answered with anything but `RESET`.

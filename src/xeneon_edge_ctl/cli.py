@@ -9,20 +9,21 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn, TextIO
 
-from xeneon_edge_ctl import __version__, apply, lock, power, profile, state
+from xeneon_edge_ctl import __version__, apply, lock, osd, power, profile, state
 from xeneon_edge_ctl.errors import EXIT_OK, UsageError, XeneonError
 from xeneon_edge_ctl.model import SETTINGS, Setting, find_setting, format_value, parse_value
 from xeneon_edge_ctl.transport.ddc import DdcTransport, Runner, subprocess_runner
 from xeneon_edge_ctl.transport.hid import DEV_ROOT, SYSFS_ROOT, DevHidIo, HidIo, HidTransport
 
 PROG = "xeneon-edge-ctl"
-COMMANDS = ("status", "get", "set", "profile", "blank", "unblank")
+COMMANDS = ("status", "get", "set", "profile", "blank", "unblank", "osd")
 
 
 def _utc_now() -> datetime:
@@ -43,6 +44,7 @@ class Environment:
     settings: Sequence[Setting] = SETTINGS
     lock_timeout_s: float = lock.DEFAULT_TIMEOUT_S
     clock: Callable[[], datetime] = _utc_now
+    sleep: Callable[[float], None] = time.sleep
 
 
 def default_environment() -> Environment:
@@ -132,6 +134,11 @@ def build_parser(settings: Sequence[Setting]) -> argparse.ArgumentParser:
 
     unblank = commands.add_parser("unblank", help="switch the picture back on over VCP 0xD6")
     _add_common_options(unblank, after_command=True)
+
+    osd_ = commands.add_parser("osd", help="work the on-screen menu with the four OSD keys (see docs/design.md#osd-key-control)")
+    osd_actions = osd_.add_subparsers(dest="osd_action", required=True, parser_class=_ArgumentParser, metavar="action")
+    where = osd_actions.add_parser("where", help="print the tracked menu state; sends nothing and takes no lock")
+    _add_common_options(where, after_command=True)
     return parser
 
 
@@ -246,6 +253,29 @@ def _run_unblank(args: argparse.Namespace, environment: Environment) -> Outcome:
     return Outcome({"blanked": False, "power_mode": reading}, f"display on (VCP 0xD6 reads {reading:02x})")
 
 
+def _run_osd_where(args: argparse.Namespace, environment: Environment) -> Outcome:
+    state_ = osd.load_state(osd.state_path(environment.env))
+    knowledge = osd.assess(state_, environment.clock())
+    age = None if knowledge.age_s is None else round(knowledge.age_s, 3)
+    data: dict[str, object] = {
+        "state": osd.state_summary(state_),
+        "known": knowledge.known,
+        "reason": knowledge.reason,
+        "age_s": age,
+    }
+    if knowledge.known:
+        verdict = "known" if age is None else f"known, last key {age:.1f} s ago"
+    else:
+        verdict = f"unknown ({knowledge.reason}); {osd.OPEN_HINT}"
+    lines = [
+        f"{'Menu:':<15}{osd.describe(state_)}",
+        f"{'State:':<15}{verdict}",
+        f"{'DCR assumed:':<15}{'on' if state_.dcr else 'off'}",
+        f"{'Reset touched:':<15}{'yes' if state_.reset_touched else 'no'}",
+    ]
+    return Outcome(data, "\n".join(lines))
+
+
 HANDLERS = {
     "status": _run_status,
     "get": _run_get,
@@ -256,6 +286,7 @@ HANDLERS = {
     "profile show": _run_profile_show,
     "blank": _run_blank,
     "unblank": _run_unblank,
+    "osd where": _run_osd_where,
 }
 
 
@@ -277,8 +308,12 @@ def _report_failure(environment: Environment, command: str | None, error: Xeneon
 
 
 def _command_name(args: argparse.Namespace) -> str:
-    """``get``, ``set``, ... ; ``profile save`` for a profile action. Used for dispatch and in the JSON."""
-    return f"profile {args.profile_action}" if args.command == "profile" else str(args.command)
+    """``get``, ``set``, ... ; ``profile save`` or ``osd where`` for an action. Used for dispatch and in the JSON."""
+    if args.command == "profile":
+        return f"profile {args.profile_action}"
+    if args.command == "osd":
+        return f"osd {args.osd_action}"
+    return str(args.command)
 
 
 def run(argv: Sequence[str], environment: Environment) -> int:

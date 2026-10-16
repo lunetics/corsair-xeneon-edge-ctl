@@ -14,6 +14,7 @@ From a checkout without installing, replace `xeneon-edge-ctl` with
 - [Settings](#settings)
 - [Profiles](#profiles)
 - [blank and unblank](#blank-and-unblank)
+- [osd: the on-screen menu](#osd-the-on-screen-menu)
 - [JSON output](#json-output)
 - [Exit codes](#exit-codes)
 - [Refused commands](#refused-commands)
@@ -43,6 +44,7 @@ The options work before or after the command.
 | `profile show <name>` | Print a stored profile. |
 | `blank` | Switch the picture off, see [blank and unblank](#blank-and-unblank). |
 | `unblank` | Switch the picture back on. |
+| `osd where` | Print the tracked state of the on-screen menu, see [osd](#osd-the-on-screen-menu). Reads one file; no device access, no lock. |
 
 Commands that write (`set`, `profile apply`, `blank`, `unblank`) take an
 exclusive lock on `$XDG_RUNTIME_DIR/xeneon-edge.lock`. If another writer holds
@@ -93,6 +95,35 @@ it, the command exits with code 7 after about two seconds.
 > USB-C (DisplayPort Alt Mode) it is untested, and the tool does not detect the
 > connector. Try `blank` there only with a plan to unplug the display.
 
+## osd: the on-screen menu
+
+The `osd` commands work the display's on-screen menu with its four keys. The
+display does not report where the menu cursor is, so the tool tracks it in a
+state file and refuses keys whose effect it cannot predict. The menu model and
+the rules are in [design.md](design.md#osd-key-control).
+
+- `osd where` prints the tracked state: the menu level, the page and entry the
+  cursor is on, the DCR assumption, whether the cursor has been on Reset, and
+  whether the state is still known. If it is not, the output says why. The
+  command sends nothing, takes no lock and never changes the state file. A
+  missing or unreadable state file is an unknown state, not an error.
+
+```sh
+xeneon-edge-ctl osd where
+```
+
+```text
+Menu:          Misc > Language
+State:         known, last key 3.5 s ago
+DCR assumed:   off
+Reset touched: no
+```
+
+With `--json`, `data` holds `state` (`level`, `page`, `entry`, `dcr`,
+`reset_touched`, `last_key_time`, `unknown_reason`), `known`, `reason` (why the
+state is unknown, else `null`) and `age_s` (seconds since the last key, or
+`null`).
+
 ## JSON output
 
 With `--json`, stdout carries exactly one object:
@@ -129,5 +160,6 @@ VCP `0xD6` (exit code 3). The reasons are in
 | Path | Content |
 |---|---|
 | `$XDG_RUNTIME_DIR/xeneon-edge.lock` | Writer lock |
+| `$XDG_RUNTIME_DIR/xeneon-edge-osd.json` | Tracked state of the on-screen menu, replaced atomically on every key |
 | `$XDG_CONFIG_HOME/corsair-xeneon-edge-ctl/profiles/<name>.json` | Profiles (`~/.config` when unset) |
 | `$XDG_STATE_HOME/corsair-xeneon-edge-ctl/last-apply.json` | Journal of the last `profile apply` (`~/.local/state` when unset) |

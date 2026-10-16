@@ -1,0 +1,1 @@
+{"ok": true, "command": "osd where", "data": {"state": {"level": "entries", "page": "Display", "entry": "DCR", "dcr": true, "reset_touched": false, "last_key_time": "2026-10-15T12:29:56.500000+00:00", "unknown_reason": null}, "known": true, "reason": null, "age_s": 3.5}, "error": null}

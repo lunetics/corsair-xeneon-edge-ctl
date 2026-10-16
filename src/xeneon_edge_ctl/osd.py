@@ -315,10 +315,9 @@ def state_path(env: Mapping[str, str]) -> Path:
     return lock.runtime_dir(env, "the OSD state file") / STATE_FILE_NAME
 
 
-def state_to_data(state: OsdState) -> dict[str, object]:
-    """The state as the JSON object stored in the state file: names, not indices."""
+def state_summary(state: OsdState) -> dict[str, object]:
+    """The state as the JSON object the commands report: names, not indices."""
     return {
-        "version": STATE_VERSION,
         "level": state.level.value,
         "page": state.page_name,
         "entry": state.entry_name,
@@ -327,6 +326,21 @@ def state_to_data(state: OsdState) -> dict[str, object]:
         "last_key_time": None if state.last_key_time is None else state.last_key_time.isoformat(),
         "unknown_reason": state.unknown_reason,
     }
+
+
+def state_to_data(state: OsdState) -> dict[str, object]:
+    """The JSON object stored in the state file: the summary plus a format version."""
+    return {"version": STATE_VERSION, **state_summary(state)}
+
+
+def describe(state: OsdState) -> str:
+    """Where the cursor is, in words."""
+    if state.level is Level.CLOSED:
+        return "closed"
+    if state.level is Level.PAGES:
+        return f"page list, cursor on {state.page_name}"
+    editing = " (editing)" if state.level is Level.EDITING else ""
+    return f"{state.page_name} > {state.entry_name}{editing}"
 
 
 def _field(data: Mapping[str, object], name: str, kind: type | tuple[type, ...], *, nullable: bool = False) -> object:
@@ -384,13 +398,13 @@ def load_state(path: Path) -> OsdState:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return OsdState(unknown_reason=f"there is no state file at {path}")
+        return OsdState(unknown_reason="there is no state file")
     except (OSError, UnicodeDecodeError) as exc:
-        return OsdState(unknown_reason=f"the state file {path} is unreadable: {exc}")
+        return OsdState(unknown_reason=f"the state file is unreadable: {exc}")
     try:
         return state_from_data(json.loads(text))
     except ValueError as exc:  # JSONDecodeError is a ValueError
-        return OsdState(unknown_reason=f"the state file {path} is unreadable: {exc}")
+        return OsdState(unknown_reason=f"the state file is unreadable: {exc}")
 
 
 def save_state(path: Path, state: OsdState) -> None:

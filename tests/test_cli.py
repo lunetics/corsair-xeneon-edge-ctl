@@ -37,6 +37,8 @@ class CliTestCase(SafeTestCase):
         self.sysfs = self.tmp / "sys"
         self.settings: Sequence[model.Setting] = model.SETTINGS
         self.env = {"XDG_RUNTIME_DIR": str(self.tmp / "run")}
+        self.now = FIXED_TIME
+        self.sleeps: list[float] = []
 
     @property
     def lock_file(self) -> Path:
@@ -54,7 +56,8 @@ class CliTestCase(SafeTestCase):
             stderr=err,
             settings=self.settings,
             lock_timeout_s=self.LOCK_TIMEOUT_S,
-            clock=lambda: FIXED_TIME,
+            clock=lambda: self.now,
+            sleep=self.sleeps.append,
         )
         code = cli.run(list(argv), environment)
         return code, out.getvalue(), err.getvalue()

@@ -1,0 +1,1 @@
+{"ok": true, "command": "osd where", "data": {"state": {"level": "closed", "page": null, "entry": null, "dcr": false, "reset_touched": false, "last_key_time": null, "unknown_reason": "there is no state file"}, "known": false, "reason": "there is no state file", "age_s": null}, "error": null}

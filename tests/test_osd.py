@@ -78,6 +78,19 @@ class StateInvariantTests(unittest.TestCase):
         self.assertEqual(at(Level.PAGES, AUDIO).entry_name, None)
 
 
+class DescribeTests(unittest.TestCase):
+    def test_the_cursor_in_words(self) -> None:
+        self.assertEqual(osd.describe(OsdState()), "closed")
+        self.assertEqual(osd.describe(at(Level.PAGES, AUDIO)), "page list, cursor on Audio")
+        self.assertEqual(osd.describe(entries(DISPLAY, 2)), "Display > DCR")
+        self.assertEqual(osd.describe(at(Level.EDITING, DISPLAY, 2)), "Display > DCR (editing)")
+
+    def test_the_summary_is_what_the_state_file_holds_minus_the_version(self) -> None:
+        state = entries(MISC, RESET, dcr=True, reset_touched=True, last_key_time=NOW)
+        self.assertEqual({"version": 1, **osd.state_summary(state)}, osd.state_to_data(state))
+        self.assertNotIn("version", osd.state_summary(state))
+
+
 class ClosedMenuTests(unittest.TestCase):
     def test_select_opens_the_menu_on_picture(self) -> None:
         self.assertEqual(osd.press(OsdState(), Key.SELECT), at(Level.PAGES, PICTURE))

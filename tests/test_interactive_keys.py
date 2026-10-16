@@ -1,34 +1,13 @@
 """Interactive mode, key decoding: terminal bytes to actions, and the 50 ms rule for a lone Escape."""
 
 import unittest
-from collections import deque
+
+from terminal_fakes import ScriptedReader
 
 from xeneon_edge_ctl import interactive
 from xeneon_edge_ctl.interactive import Action
 
 ESC = b"\x1b"
-
-
-class ScriptedReader:
-    """The fake terminal input: one byte per call, ``None`` for a timeout, ``b""`` for end of input.
-
-    Items are bytes (split into single bytes), ``None`` or ``b""``. Reading past the script fails the test loudly.
-    """
-
-    def __init__(self, *script: bytes | None) -> None:
-        self.queue: deque[bytes | None] = deque()
-        for item in script:
-            if item is None or item == b"":
-                self.queue.append(item)
-            else:
-                self.queue.extend(item[index : index + 1] for index in range(len(item)))
-        self.timeouts: list[float | None] = []
-
-    def __call__(self, timeout_s: float | None) -> bytes | None:
-        self.timeouts.append(timeout_s)
-        if not self.queue:
-            raise AssertionError("the script ended, but the code read more input")
-        return self.queue.popleft()
 
 
 class DecodeTests(unittest.TestCase):

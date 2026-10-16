@@ -44,10 +44,12 @@ The options work before or after the command.
 | `profile show <name>` | Print a stored profile. |
 | `blank` | Switch the picture off, see [blank and unblank](#blank-and-unblank). |
 | `unblank` | Switch the picture back on. |
-| `osd where` | Print the tracked state of the on-screen menu, see [osd](#osd-the-on-screen-menu). Reads one file; no device access, no lock. |
+| `osd open [--dcr on\|off]` | Open the on-screen menu on Picture, see [osd](#osd-the-on-screen-menu). |
+| `osd where` | Print the tracked state of the on-screen menu. Reads one file; no device access, no lock. |
+| `osd close` | Close the on-screen menu. |
 
-Commands that write (`set`, `profile apply`, `blank`, `unblank`) take an
-exclusive lock on `$XDG_RUNTIME_DIR/xeneon-edge.lock`. If another writer holds
+Commands that write (`set`, `profile apply`, `blank`, `unblank`, `osd open`,
+`osd close`) take an exclusive lock on `$XDG_RUNTIME_DIR/xeneon-edge.lock`. If another writer holds
 it, the command exits with code 7 after about two seconds.
 
 ## Settings
@@ -97,32 +99,53 @@ it, the command exits with code 7 after about two seconds.
 
 ## osd: the on-screen menu
 
-The `osd` commands work the display's on-screen menu with its four keys. The
-display does not report where the menu cursor is, so the tool tracks it in a
-state file and refuses keys whose effect it cannot predict. The menu model and
-the rules are in [design.md](design.md#osd-key-control).
-
-- `osd where` prints the tracked state: the menu level, the page and entry the
-  cursor is on, the DCR assumption, whether the cursor has been on Reset, and
-  whether the state is still known. If it is not, the output says why. The
-  command sends nothing, takes no lock and never changes the state file. A
-  missing or unreadable state file is an unknown state, not an error.
+The `osd` commands work the display's on-screen menu with its four keys over
+HID. The display does not report where the menu cursor is, so the tool tracks
+it in a state file. The menu model and the reasoning are in
+[design.md](design.md#osd-key-control). Pressing single keys (`osd key`) follows
+in the next release step.
 
 ```sh
+xeneon-edge-ctl osd open
 xeneon-edge-ctl osd where
+xeneon-edge-ctl osd close
 ```
 
+The menu has the pages Picture, Colour, Display, Audio and Misc. With Dynamic
+Contrast Ratio (DCR) on, entering Picture starts on Sharpness; the display
+cannot report DCR, so the tool assumes it is off unless you say
+`osd open --dcr on`.
+
+- `osd open [--dcr on|off]` presses `back` three times and then `select`, so
+  the menu is open on Picture whatever state it was in. It always works, starts
+  a new tracked state and clears the Reset mark.
+- `osd where` prints the tracked state: the menu level, the page and entry the
+  cursor is on, the DCR assumption, whether the cursor has been on Reset, and
+  whether the state is still known (if not, why). It sends nothing, takes no
+  lock and never changes the state file. A missing or unreadable state file is an
+  unknown state, not an error.
+- `osd close` presses `back` three times, so the menu is closed. It always
+  works and clears the Reset mark.
+
+Keys within one command are sent 150 ms apart. `osd open` and `osd close` hold
+the writer lock from the first key to the last. They use HID only, never
+DDC/CI; `--ddc-bus` is accepted and ignored. If a press fails, the state file
+says the position is unknown until the next `osd open` or `osd close`.
+
+With `--json`, `data` of `osd open` and `osd close` holds `keys` (the keys sent,
+in order) and `state`. `state` has `level` (`closed`, `pages`, `entries` or
+`editing`), `page`, `entry`, `dcr`, `reset_touched`, `last_key_time` and
+`unknown_reason` (`null` unless the position cannot be trusted). `osd where` has
+`state`, `known`, `reason` (why the state is unknown, else `null`) and `age_s`
+(seconds since the last key, or `null`).
+
 ```text
+$ xeneon-edge-ctl osd where
 Menu:          Misc > Language
 State:         known, last key 3.5 s ago
 DCR assumed:   off
 Reset touched: no
 ```
-
-With `--json`, `data` holds `state` (`level`, `page`, `entry`, `dcr`,
-`reset_touched`, `last_key_time`, `unknown_reason`), `known`, `reason` (why the
-state is unknown, else `null`) and `age_s` (seconds since the last key, or
-`null`).
 
 ## JSON output
 
@@ -153,13 +176,14 @@ On failure `ok` is `false`, `data` is `null` and `error` holds `code` and
 The tool refuses to send the factory-reset frame (HID `0x0F FF`), the VCP codes
 `0x04`, `0x05`, `0x06`, `0x08` and `0x60`, and any value but `01` and `05` for
 VCP `0xD6` (exit code 3). The reasons are in
-[design.md](design.md#safety).
+[design.md](design.md#safety). The HID transport sends nothing in group `01`
+except the four OSD key frames.
 
 ## Files
 
 | Path | Content |
 |---|---|
 | `$XDG_RUNTIME_DIR/xeneon-edge.lock` | Writer lock |
-| `$XDG_RUNTIME_DIR/xeneon-edge-osd.json` | Tracked state of the on-screen menu, replaced atomically on every key |
+| `$XDG_RUNTIME_DIR/xeneon-edge-osd.json` | Tracked state of the on-screen menu, replaced atomically before the first key and when a command ends |
 | `$XDG_CONFIG_HOME/corsair-xeneon-edge-ctl/profiles/<name>.json` | Profiles (`~/.config` when unset) |
 | `$XDG_STATE_HOME/corsair-xeneon-edge-ctl/last-apply.json` | Journal of the last `profile apply` (`~/.local/state` when unset) |

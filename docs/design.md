@@ -1,6 +1,6 @@
 # Design
 
-Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`. Not yet implemented: OSD key control (`osd`). Settings that exist only in the on-screen menu follow in a later version.
+Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`, `osd open`/`where`/`close`. Not yet implemented: `osd key`. Settings that exist only in the on-screen menu follow in a later version.
 
 ## Contents
 

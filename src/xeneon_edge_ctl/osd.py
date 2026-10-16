@@ -11,11 +11,12 @@ import dataclasses
 import json
 import os
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import Protocol
 
 from xeneon_edge_ctl import lock
 from xeneon_edge_ctl.errors import RefusedError, TransportError, UsageError
@@ -96,6 +97,7 @@ KEY_SPACING_S = 0.15
 MAX_REPEAT = 50
 
 REASON_RESET = "Reset was selected; what the display does afterwards is not measured"
+REASON_INTERRUPTED = "a key sequence started and did not finish, so the cursor position is unknown"
 
 
 @dataclass(frozen=True)
@@ -275,6 +277,12 @@ def _require_confirmation(state: OsdState, key: Key, confirm_reset: bool, positi
         )
 
 
+def check_repeat(repeat: int) -> None:
+    """``--repeat`` must be 1 to 50; anything else is a usage error, detected before any I/O."""
+    if not 1 <= repeat <= MAX_REPEAT:
+        raise UsageError(f"--repeat must be between 1 and {MAX_REPEAT}, got {repeat}")
+
+
 def plan_keys(state: OsdState, now: datetime, key: Key, repeat: int = 1, confirm_reset: bool = False) -> Plan:
     """Check ``repeat`` presses of ``key`` against the tracked state; raise before any key is sent.
 
@@ -282,8 +290,7 @@ def plan_keys(state: OsdState, now: datetime, key: Key, repeat: int = 1, confirm
     the state is unknown, when a step has no measured effect, when a step needs ``--confirm-reset``
     without having it, or when keys would follow a Reset (their effect is unknown).
     """
-    if not 1 <= repeat <= MAX_REPEAT:
-        raise UsageError(f"--repeat must be between 1 and {MAX_REPEAT}, got {repeat}")
+    check_repeat(repeat)
     knowledge = assess(state, now)
     if not knowledge.known:
         raise RefusedError(f"the OSD state is unknown ({knowledge.reason}); {OPEN_HINT}")
@@ -427,3 +434,43 @@ def save_state(path: Path, state: OsdState) -> None:
                 os.unlink(temporary)
             except OSError:
                 pass
+
+
+class KeyPresser(Protocol):
+    """What sending needs from the HID transport."""
+
+    def press_key(self, selector: int) -> None: ...
+
+
+def _remember(path: Path, state: OsdState, *, key_sent: bool) -> None:
+    """Save the state after a key. If that fails, the key is out but the file is stale: say so."""
+    try:
+        save_state(path, state)
+    except TransportError as error:
+        if not key_sent:
+            raise
+        raise TransportError(f"{error}; the key was already sent, so the menu state is unknown: {OPEN_HINT}") from None
+
+
+def send_sequence(
+    presser: KeyPresser,
+    path: Path,
+    state: OsdState,
+    keys: Sequence[Key],
+    finish: Callable[[datetime], OsdState],
+    clock: Callable[[], datetime],
+    sleep: Callable[[float], None],
+) -> OsdState:
+    """Send the fixed keys of ``osd open`` or ``osd close`` and save the state ``finish`` describes.
+
+    The position is unknown until the last key is out, so the file says so first (which also proves
+    it can be written). A failure leaves that mark in place.
+    """
+    save_state(path, dataclasses.replace(state, unknown_reason=REASON_INTERRUPTED))
+    for number, key in enumerate(keys):
+        if number:
+            sleep(KEY_SPACING_S)
+        presser.press_key(KEY_SELECTORS[key])
+    final = finish(clock())
+    _remember(path, final, key_sent=True)
+    return final

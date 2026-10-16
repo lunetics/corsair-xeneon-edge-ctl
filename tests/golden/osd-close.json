@@ -1,0 +1,1 @@
+{"ok": true, "command": "osd close", "data": {"keys": ["back", "back", "back"], "state": {"level": "closed", "page": null, "entry": null, "dcr": true, "reset_touched": false, "last_key_time": "2026-10-15T12:30:00.300000+00:00", "unknown_reason": null}}, "error": null}

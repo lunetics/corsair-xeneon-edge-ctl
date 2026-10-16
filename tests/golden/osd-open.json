@@ -1,0 +1,1 @@
+{"ok": true, "command": "osd open", "data": {"keys": ["back", "back", "back", "select"], "state": {"level": "pages", "page": "Picture", "entry": null, "dcr": false, "reset_touched": false, "last_key_time": "2026-10-15T12:30:00.450000+00:00", "unknown_reason": null}}, "error": null}

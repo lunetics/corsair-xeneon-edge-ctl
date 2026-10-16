@@ -137,6 +137,16 @@ def build_parser(settings: Sequence[Setting]) -> argparse.ArgumentParser:
 
     osd_ = commands.add_parser("osd", help="work the on-screen menu with the four OSD keys (see docs/design.md#osd-key-control)")
     osd_actions = osd_.add_subparsers(dest="osd_action", required=True, parser_class=_ArgumentParser, metavar="action")
+    open_ = osd_actions.add_parser("open", help="press back three times, then select: the menu is open on Picture")
+    open_.add_argument(
+        "--dcr",
+        choices=("on", "off"),
+        default="off",
+        help="DCR cannot be read from the display; say 'on' if it is on, so Picture starts on Sharpness (default: off)",
+    )
+    _add_common_options(open_, after_command=True)
+    close = osd_actions.add_parser("close", help="press back three times: the menu is closed")
+    _add_common_options(close, after_command=True)
     where = osd_actions.add_parser("where", help="print the tracked menu state; sends nothing and takes no lock")
     _add_common_options(where, after_command=True)
     return parser
@@ -253,6 +263,50 @@ def _run_unblank(args: argparse.Namespace, environment: Environment) -> Outcome:
     return Outcome({"blanked": False, "power_mode": reading}, f"display on (VCP 0xD6 reads {reading:02x})")
 
 
+def _open_hid(environment: Environment) -> HidTransport:
+    """The HID channel only (the OSD keys never touch DDC/CI). The node is looked up now, so a missing
+    display exits with code 4 before the state file is touched."""
+    transport = HidTransport(environment.hid_io, environment.sysfs_root, environment.dev_root)
+    transport.node()
+    return transport
+
+
+def _run_osd_open(args: argparse.Namespace, environment: Environment) -> Outcome:
+    dcr = args.dcr == "on"
+    path = osd.state_path(environment.env)
+    with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
+        hid_transport = _open_hid(environment)
+        final = osd.send_sequence(
+            hid_transport,
+            path,
+            osd.load_state(path),
+            osd.OPEN_KEYS,
+            lambda now: osd.opened_state(now, dcr=dcr),
+            environment.clock,
+            environment.sleep,
+        )
+    data: dict[str, object] = {"keys": [key.value for key in osd.OPEN_KEYS], "state": osd.state_summary(final)}
+    return Outcome(data, f"menu opened on Picture (DCR assumed {'on' if dcr else 'off'})")
+
+
+def _run_osd_close(args: argparse.Namespace, environment: Environment) -> Outcome:
+    path = osd.state_path(environment.env)
+    with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
+        hid_transport = _open_hid(environment)
+        previous = osd.load_state(path)
+        final = osd.send_sequence(
+            hid_transport,
+            path,
+            previous,
+            osd.CLOSE_KEYS,
+            lambda now: osd.closed_state(now, dcr=previous.dcr),
+            environment.clock,
+            environment.sleep,
+        )
+    data: dict[str, object] = {"keys": [key.value for key in osd.CLOSE_KEYS], "state": osd.state_summary(final)}
+    return Outcome(data, "menu closed")
+
+
 def _run_osd_where(args: argparse.Namespace, environment: Environment) -> Outcome:
     state_ = osd.load_state(osd.state_path(environment.env))
     knowledge = osd.assess(state_, environment.clock())
@@ -286,6 +340,8 @@ HANDLERS = {
     "profile show": _run_profile_show,
     "blank": _run_blank,
     "unblank": _run_unblank,
+    "osd open": _run_osd_open,
+    "osd close": _run_osd_close,
     "osd where": _run_osd_where,
 }
 

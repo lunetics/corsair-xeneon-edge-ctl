@@ -10,8 +10,9 @@ are trademarks of their respective owners.
 
 ## Status
 
-Pre-release. `status`, `get`, `set`, the `profile` commands and
-`blank`/`unblank` work. OSD key navigation is planned; the full design is in
+Pre-release. `status`, `get`, `set`, the `profile` commands, `blank`/`unblank`
+and the `osd open`, `osd where` and `osd close` commands for the on-screen menu
+work. Pressing single menu keys (`osd key`) is planned; the full design is in
 [docs/design.md](docs/design.md).
 
 ## Requirements
@@ -57,6 +58,8 @@ xeneon-edge-ctl profile save work
 xeneon-edge-ctl profile apply work
 xeneon-edge-ctl blank
 xeneon-edge-ctl unblank
+xeneon-edge-ctl osd open
+xeneon-edge-ctl osd close
 ```
 
 Every command that writes reads the value back and fails with exit code 6 on a

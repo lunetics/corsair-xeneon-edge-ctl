@@ -244,8 +244,10 @@ The transport allowlist admits exactly these four frames.
   on a closed menu is not measured.
 - `osd key` plans every step of a `--repeat` run and checks it before the first
   key is sent; a refused step sends nothing.
-- Keys within one command are 150 ms apart. Every command that sends keys holds
-  the writer lock for the whole sequence.
+- Keys are at least 150 ms apart, the spacing at which key delivery was
+  measured, also across commands: a command whose first key would follow the
+  previous key (from the state file) sooner waits for the rest of the 150 ms.
+  Every command that sends keys holds the writer lock for the whole sequence.
 - The JSON `data` of `osd open`, `osd key` and `osd close` names the keys sent and
   the tracked state afterwards; `osd where` adds whether the state is known and
   its age.
@@ -296,6 +298,9 @@ the single commands; the lock is taken for each key press, not for the session.
   every way out, including errors and Ctrl-C.
 - Escape and the arrow keys share their first byte. A lone Escape is recognised
   when no further byte follows within 50 ms.
+- Terminal input that arrives while an action is being carried out is
+  discarded, so a held-down arrow key presses at most one key per action and
+  nothing keeps going after the key is released.
 
 ## Safety
 

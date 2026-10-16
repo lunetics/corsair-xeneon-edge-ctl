@@ -21,12 +21,17 @@ DEFAULT_TIMEOUT_S = 2.0
 POLL_INTERVAL_S = 0.05
 
 
+def runtime_dir(env: Mapping[str, str], purpose: str) -> Path:
+    """``XDG_RUNTIME_DIR``; there is no fallback, so an unset variable is an I/O error naming ``purpose``."""
+    directory = env.get("XDG_RUNTIME_DIR", "")
+    if not directory:
+        raise TransportError(f"XDG_RUNTIME_DIR is not set, so there is no place for {purpose}")
+    return Path(directory)
+
+
 def lock_path(env: Mapping[str, str]) -> Path:
     """The lock file path, from ``XDG_RUNTIME_DIR``."""
-    runtime_dir = env.get("XDG_RUNTIME_DIR", "")
-    if not runtime_dir:
-        raise TransportError("XDG_RUNTIME_DIR is not set, so there is no place for the single-writer lock")
-    return Path(runtime_dir) / LOCK_FILE_NAME
+    return runtime_dir(env, "the single-writer lock") / LOCK_FILE_NAME
 
 
 class SingleWriterLock:

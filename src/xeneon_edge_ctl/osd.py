@@ -8,11 +8,17 @@ other functions of this module and in ``cli``.
 """
 
 import dataclasses
+import json
+import os
+import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 
-from xeneon_edge_ctl.errors import RefusedError, UsageError
+from xeneon_edge_ctl import lock
+from xeneon_edge_ctl.errors import RefusedError, TransportError, UsageError
 from xeneon_edge_ctl.transport import hid
 
 
@@ -298,3 +304,112 @@ def plan_keys(state: OsdState, now: datetime, key: Key, repeat: int = 1, confirm
         steps.append(PlannedKey(key, after))
         current = after
     return Plan(tuple(steps), tuple(warnings))
+
+
+STATE_FILE_NAME = "xeneon-edge-osd.json"
+STATE_VERSION = 1
+
+
+def state_path(env: Mapping[str, str]) -> Path:
+    """The state file path, from ``XDG_RUNTIME_DIR`` like the lock file."""
+    return lock.runtime_dir(env, "the OSD state file") / STATE_FILE_NAME
+
+
+def state_to_data(state: OsdState) -> dict[str, object]:
+    """The state as the JSON object stored in the state file: names, not indices."""
+    return {
+        "version": STATE_VERSION,
+        "level": state.level.value,
+        "page": state.page_name,
+        "entry": state.entry_name,
+        "dcr": state.dcr,
+        "reset_touched": state.reset_touched,
+        "last_key_time": None if state.last_key_time is None else state.last_key_time.isoformat(),
+        "unknown_reason": state.unknown_reason,
+    }
+
+
+def _field(data: Mapping[str, object], name: str, kind: type | tuple[type, ...], *, nullable: bool = False) -> object:
+    if name not in data:
+        raise ValueError(f"field {name!r} is missing")
+    value = data[name]
+    if value is None and nullable:
+        return None
+    if not isinstance(value, kind):
+        raise ValueError(f"field {name!r} has the wrong type")
+    return value
+
+
+def state_from_data(data: object) -> OsdState:
+    """Parse the stored object; every deviation raises ``ValueError``."""
+    if not isinstance(data, dict):
+        raise ValueError("the state is not a JSON object")
+    if data.get("version") != STATE_VERSION or isinstance(data.get("version"), bool):
+        raise ValueError(f"unsupported state version {data.get('version')!r}")
+    level = Level(str(_field(data, "level", str)))
+    page_name = _field(data, "page", str, nullable=True)
+    entry_name = _field(data, "entry", str, nullable=True)
+    page = None
+    entry = None
+    if page_name is not None:
+        names = [candidate.name for candidate in MENU]
+        if page_name not in names:
+            raise ValueError(f"unknown page {page_name!r}")
+        page = names.index(str(page_name))
+    if entry_name is not None:
+        if page is None:
+            raise ValueError("an entry without a page")
+        entry_names = [candidate.name for candidate in MENU[page].entries]
+        if entry_name not in entry_names:
+            raise ValueError(f"unknown entry {entry_name!r} on page {page_name}")
+        entry = entry_names.index(str(entry_name))
+    stamp = _field(data, "last_key_time", str, nullable=True)
+    last_key_time = None if stamp is None else datetime.fromisoformat(str(stamp))
+    if last_key_time is not None and last_key_time.tzinfo is None:
+        raise ValueError("the key time has no time zone")
+    reason = _field(data, "unknown_reason", str, nullable=True)
+    return OsdState(
+        level=level,
+        page=page,
+        entry=entry,
+        dcr=bool(_field(data, "dcr", bool)),
+        reset_touched=bool(_field(data, "reset_touched", bool)),
+        last_key_time=last_key_time,
+        unknown_reason=None if reason is None else str(reason),
+    )
+
+
+def load_state(path: Path) -> OsdState:
+    """Read the state file. A missing or unreadable file is an UNKNOWN state, never an error."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return OsdState(unknown_reason=f"there is no state file at {path}")
+    except (OSError, UnicodeDecodeError) as exc:
+        return OsdState(unknown_reason=f"the state file {path} is unreadable: {exc}")
+    try:
+        return state_from_data(json.loads(text))
+    except ValueError as exc:  # JSONDecodeError is a ValueError
+        return OsdState(unknown_reason=f"the state file {path} is unreadable: {exc}")
+
+
+def save_state(path: Path, state: OsdState) -> None:
+    """Replace the state file atomically: a temporary file in the same directory, then ``os.replace``."""
+    text = json.dumps(state_to_data(state), indent=2) + "\n"
+    temporary: str | None = None
+    try:
+        descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    except OSError as exc:
+        raise TransportError(f"cannot write the OSD state file {path}: {exc}") from None
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass

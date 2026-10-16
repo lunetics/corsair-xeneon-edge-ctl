@@ -6,8 +6,9 @@ everything outside an allowlist, and a deny rule always wins over an allow rule.
 The frame layout and all constants below were measured on the device (USB
 1b1c:1d0d, screen firmware 20250714V1). A report is 64 bytes: byte 0 is the
 report ID 0x01, byte 1 the command. Reads (0x09, 0x0E) carry no payload. A write
-(0x0F) carries ``[group][selector][value]`` from byte 6 on; group 02 sets the
-sliders (0-100), group 03 the RGB gains (0-255).
+(0x0F) carries ``[group][selector][value]`` from byte 6 on; group 01 presses an
+OSD key (no value byte), group 02 sets the sliders (0-100), group 03 the RGB
+gains (0-255).
 """
 
 import errno
@@ -30,8 +31,16 @@ CMD_READ_FIRMWARE = 0x09
 CMD_READ_PARAMS = 0x0E
 CMD_WRITE = 0x0F
 
+GROUP_OSD_KEY = 0x01
 GROUP_SLIDER = 0x02
 GROUP_GAIN = 0x03
+
+# Group 01 selectors: the four keys of the on-screen menu, measured on the device.
+KEY_SELECT = 0x00
+KEY_RIGHT = 0x01
+KEY_LEFT = 0x02
+KEY_BACK = 0x03
+OSD_KEY_SELECTORS = (KEY_SELECT, KEY_RIGHT, KEY_LEFT, KEY_BACK)
 
 # The reply to 0x0E takes 887-997 ms on the device; a 1000 ms wait lost replies.
 READ_TIMEOUT_MS = 3000
@@ -78,6 +87,11 @@ def _rule(name: str, pattern: str, note: str) -> Rule:
 ALLOW_RULES = (
     _rule("read-firmware", r"0109(00){62}", "command 0x09 returns the screen firmware string"),
     _rule("read-params", r"010e(00){62}", "command 0x0E returns brightness, backlight, contrast and the RGB gains"),
+    _rule(
+        "press-osd-key",
+        r"010f0000000001(00|01|02|03)(00){56}",
+        "group 01: selector 00 select, 01 right, 02 left, 03 back; no value byte, the rest zero",
+    ),
     _rule(
         "set-slider",
         r"010f0000000002(00|01|02)(0[0-9a-f]|[1-5][0-9a-f]|6[0-4])(00){55}",
@@ -142,6 +156,13 @@ def build_write_frame(group: int, selector: int, value: int) -> bytes:
         if not 0 <= part <= 0xFF:
             raise RefusedError(f"HID write refused: {part} does not fit in one byte")
     return bytes([REPORT_ID, CMD_WRITE, 0, 0, 0, 0, group, selector, value]).ljust(REPORT_SIZE, b"\x00")
+
+
+def build_key_frame(selector: int) -> bytes:
+    """An OSD key press: a group 01 write whose value byte stays zero. Unknown selectors are refused."""
+    if selector not in OSD_KEY_SELECTORS:
+        raise RefusedError(f"HID key press refused: selector {selector:#04x} is not one of the four OSD keys")
+    return build_write_frame(GROUP_OSD_KEY, selector, 0)
 
 
 def _payload(report: bytes, command: int) -> bytes:
@@ -305,6 +326,10 @@ class HidTransport:
         if reply is None:
             raise TransportError("no reply to the HID read command 0x09")
         return parse_firmware(reply)
+
+    def press_key(self, selector: int) -> None:
+        """Press one OSD key. Like any write, the acknowledgement is not required."""
+        self.exchange(build_key_frame(selector), CMD_WRITE, ACK_TIMEOUT_MS)
 
     def write_value(self, group: int, selector: int, value: int) -> None:
         """Write one value. The acknowledgement is not required: callers read the value back."""

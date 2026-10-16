@@ -24,6 +24,11 @@ def write_frame(group: int, selector: int, value: int) -> bytes:
     return pad(bytes([0x01, 0x0F, 0, 0, 0, 0, group, selector, value]))
 
 
+def key_frame(selector: int) -> bytes:
+    """The documented layout, spelled out byte by byte: 01 0F 00 00 00 00 01 <selector>, then zeros."""
+    return pad(bytes([0x01, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x01, selector]))
+
+
 class GateTests(unittest.TestCase):
     def test_allowed_frames_pass(self) -> None:
         allowed = [read_frame(0x09), read_frame(0x0E)]
@@ -32,6 +37,13 @@ class GateTests(unittest.TestCase):
         for frame in allowed:
             with self.subTest(frame=frame[:9].hex(" ")):
                 self.assertTrue(hid.gate(frame).allowed)
+
+    def test_each_of_the_four_osd_key_frames_passes(self) -> None:
+        for name, selector in (("select", 0), ("right", 1), ("left", 2), ("back", 3)):
+            with self.subTest(key=name):
+                verdict = hid.gate(key_frame(selector))
+                self.assertTrue(verdict.allowed)
+                self.assertEqual(verdict.rule.name if verdict.rule else None, "press-osd-key")
 
     def test_factory_reset_is_denied(self) -> None:
         verdict = hid.gate(RESET_FRAME)
@@ -50,8 +62,14 @@ class GateTests(unittest.TestCase):
             "unknown slider selector": write_frame(2, 3, 10),
             "unknown gain channel": write_frame(3, 4, 10),
             "gain channel 0": write_frame(3, 0, 10),
-            "osd menu key": write_frame(1, 0, 0),
-            "osd right key": write_frame(1, 1, 0),
+            "osd key selector 04": write_frame(1, 4, 0),
+            "osd key selector ff": write_frame(1, 0xFF, 0),
+            "osd select with a value byte": write_frame(1, 0, 1),
+            "osd back with a value byte": write_frame(1, 3, 0x7F),
+            "osd key with a byte in the reserved header": pad(bytes([0x01, 0x0F, 0, 0, 1, 0, 1, 0])),
+            "osd key with a trailing byte": pad(bytes([0x01, 0x0F, 0, 0, 0, 0, 1, 0, 0, 0, 1])),
+            "osd key with the last byte set": pad(bytes([0x01, 0x0F, 0, 0, 0, 0, 1, 0]))[:63] + b"\x01",
+            "short osd key frame": bytes([0x01, 0x0F, 0, 0, 0, 0, 1, 0]),
             "osd rotation": pad(bytes([0x01, 0x10, 0, 0, 0, 2, 0])),
             "angle read": read_frame(0x11),
             "short read frame": bytes([0x01, 0x0E]),
@@ -153,6 +171,27 @@ class ReportTests(SafeTestCase):
         self.transport.write_value(3, 1, 200)
         self.assertEqual(self.io.frames, [write_frame(3, 1, 200)])
         self.assertEqual(self.display.red, 200)
+
+    def test_press_key_sends_the_exact_key_frame(self) -> None:
+        for selector in (0, 1, 2, 3):
+            self.transport.press_key(selector)
+        self.assertEqual(self.io.frames, [key_frame(selector) for selector in (0, 1, 2, 3)])
+        self.assertEqual({call[2] for call in self.io.calls}, {0x0F})
+
+    def test_build_key_frame_matches_the_documented_layout(self) -> None:
+        for selector in (0, 1, 2, 3):
+            self.assertEqual(hid.build_key_frame(selector), key_frame(selector))
+
+    def test_press_key_with_an_unknown_selector_is_refused_before_any_io(self) -> None:
+        for selector in (4, 0x10, 0xFF):
+            with self.subTest(selector=selector), self.assertRaises(RefusedError):
+                self.transport.press_key(selector)
+        self.assertEqual(self.io.calls, [])
+
+    def test_write_value_cannot_smuggle_a_value_into_a_key_frame(self) -> None:
+        with self.assertRaises(RefusedError):
+            self.transport.write_value(1, 0, 1)
+        self.assertEqual(self.io.calls, [])
 
     def test_missing_read_reply_is_a_protocol_error(self) -> None:
         with self.assertRaises(TransportError) as caught:

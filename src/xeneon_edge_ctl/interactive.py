@@ -9,11 +9,16 @@ and send path as the single ``osd`` commands.
 """
 
 import contextlib
+import errno
+import os
+import select
+import termios
+import tty
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, TextIO
 
 from xeneon_edge_ctl import osd
 from xeneon_edge_ctl.errors import RefusedError, XeneonError
@@ -293,3 +298,62 @@ def run_session(terminal: Terminal, menu: Menu, *, dcr: bool) -> SessionResult:
     """
     ending = _Session(terminal, menu, dcr).run()
     return SessionResult(ending, menu.state())
+
+
+DEFAULT_COLUMNS = 80
+_LINE_CHUNK = 4096
+
+
+class PosixTerminal:
+    """The real terminal: raw bytes from a file descriptor, ``termios`` modes, text to a stream.
+
+    Single bytes are read with ``os.read`` after ``select``, so nothing is buffered behind the
+    session's back (a buffered reader would hide a lone Escape from the 50 ms rule). ``set_cbreak``
+    keeps ``ISIG`` on: Ctrl-C raises ``KeyboardInterrupt``. Both mode changes flush pending input, so
+    keys typed ahead can neither send a key nor answer the Reset question.
+    """
+
+    def __init__(self, input_fd: int, output: TextIO) -> None:
+        self.input_fd = input_fd
+        self.output = output
+        self._saved: list[object] | None = None
+
+    def read(self, timeout_s: float | None) -> bytes | None:
+        ready, _, _ = select.select([self.input_fd], [], [], timeout_s)
+        if not ready:
+            return None
+        try:
+            return os.read(self.input_fd, 1)
+        except OSError as exc:
+            if exc.errno == errno.EIO:  # the terminal went away
+                return b""
+            raise
+
+    def read_line(self) -> str | None:
+        try:
+            data = os.read(self.input_fd, _LINE_CHUNK)
+        except OSError as exc:
+            if exc.errno == errno.EIO:
+                return None
+            raise
+        return data.decode("utf-8", errors="replace") if data else None
+
+    def write(self, text: str) -> None:
+        self.output.write(text)
+        self.output.flush()
+
+    def columns(self) -> int:
+        try:
+            width = os.get_terminal_size(self.output.fileno()).columns
+        except (OSError, ValueError):
+            return DEFAULT_COLUMNS
+        return width if width > 0 else DEFAULT_COLUMNS
+
+    def set_cbreak(self) -> None:
+        if self._saved is None:
+            self._saved = termios.tcgetattr(self.input_fd)
+        tty.setcbreak(self.input_fd, termios.TCSAFLUSH)
+
+    def restore(self) -> None:
+        if self._saved is not None:
+            termios.tcsetattr(self.input_fd, termios.TCSAFLUSH, self._saved)

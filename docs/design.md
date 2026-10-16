@@ -1,6 +1,6 @@
 # Design
 
-Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`, `osd open`/`where`/`close`. Not yet implemented: `osd key`. Settings that exist only in the on-screen menu follow in a later version.
+Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`, `osd open`/`key`/`where`/`close`. Settings that exist only in the on-screen menu follow in a later version.
 
 ## Contents
 
@@ -231,8 +231,10 @@ The transport allowlist admits exactly these four frames.
   of the last key. It is replaced atomically.
 - The state is **unknown** when the menu is tracked as open and the last key is
   more than 8 s old (below the shortest Menu Time), when the file is missing or
-  unreadable, and after Reset was selected. `osd key` then refuses with exit code
-  3 and asks for `osd open`. `osd open` and `osd close` always work.
+  unreadable, and after Reset was selected. It is also unknown after a key press
+  failed or a key sequence did not finish, because the key may or may not have
+  arrived. `osd key` then refuses with exit code 3 and asks for `osd open`.
+  `osd open` and `osd close` always work.
 - With the menu tracked as closed, `select` opens it on Picture and `back` does
   nothing; `left` and `right` are refused with exit code 3, because their effect
   on a closed menu is not measured.

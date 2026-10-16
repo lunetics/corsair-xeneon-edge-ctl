@@ -1,0 +1,1 @@
+{"ok": false, "command": "osd key", "data": null, "error": {"code": "refused", "message": "the OSD state is unknown (the last key was 20 s ago and the menu closes itself after as little as 10 s (limit 8 s)); run 'xeneon-edge-ctl osd open' to start from a known place"}}

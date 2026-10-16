@@ -66,6 +66,7 @@ class Outcome:
 
     data: dict[str, object]
     text: str
+    warnings: tuple[str, ...] = ()
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -145,6 +146,15 @@ def build_parser(settings: Sequence[Setting]) -> argparse.ArgumentParser:
         help="DCR cannot be read from the display; say 'on' if it is on, so Picture starts on Sharpness (default: off)",
     )
     _add_common_options(open_, after_command=True)
+    key = osd_actions.add_parser("key", help="press one OSD key once or --repeat times")
+    key.add_argument("key", choices=[member.value for member in osd.Key], help="the key to press")
+    key.add_argument("--repeat", type=int, default=1, metavar="N", help=f"press the key N times, 1 to {osd.MAX_REPEAT} (default: 1)")
+    key.add_argument(
+        "--confirm-reset",
+        action="store_true",
+        help="allow 'select' on the menu entry Reset (resets the display); only a person may give this",
+    )
+    _add_common_options(key, after_command=True)
     close = osd_actions.add_parser("close", help="press back three times: the menu is closed")
     _add_common_options(close, after_command=True)
     where = osd_actions.add_parser("where", help="print the tracked menu state; sends nothing and takes no lock")
@@ -271,6 +281,17 @@ def _open_hid(environment: Environment) -> HidTransport:
     return transport
 
 
+def _keys_text(keys: Sequence[osd.Key]) -> str:
+    return f"{keys[0]} x{len(keys)}" if len(keys) > 1 and len(set(keys)) == 1 else ", ".join(keys)
+
+
+def _after_text(state_: osd.OsdState) -> str:
+    text = f"menu: {osd.describe(state_)}"
+    if state_.unknown_reason is not None:
+        text += f" (state unknown: {state_.unknown_reason}; {osd.OPEN_HINT})"
+    return text
+
+
 def _run_osd_open(args: argparse.Namespace, environment: Environment) -> Outcome:
     dcr = args.dcr == "on"
     path = osd.state_path(environment.env)
@@ -307,6 +328,25 @@ def _run_osd_close(args: argparse.Namespace, environment: Environment) -> Outcom
     return Outcome(data, "menu closed")
 
 
+def _run_osd_key(args: argparse.Namespace, environment: Environment) -> Outcome:
+    # Usage first (range of --repeat), then the lock, then the state-dependent checks: the state file
+    # is read and the whole run planned while no other writer can change it, and before any key is sent.
+    osd.check_repeat(args.repeat)
+    key = osd.Key(args.key)
+    path = osd.state_path(environment.env)
+    with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
+        current = osd.load_state(path)
+        plan = osd.plan_keys(current, environment.clock(), key, args.repeat, args.confirm_reset)
+        final = osd.send_plan(_open_hid(environment), path, current, plan, environment.clock, environment.sleep)
+    keys = [step.key for step in plan.steps]
+    data: dict[str, object] = {
+        "keys": [sent.value for sent in keys],
+        "state": osd.state_summary(final),
+        "warnings": list(plan.warnings),
+    }
+    return Outcome(data, f"pressed {_keys_text(keys)}; {_after_text(final)}", plan.warnings)
+
+
 def _run_osd_where(args: argparse.Namespace, environment: Environment) -> Outcome:
     state_ = osd.load_state(osd.state_path(environment.env))
     knowledge = osd.assess(state_, environment.clock())
@@ -341,6 +381,7 @@ HANDLERS = {
     "blank": _run_blank,
     "unblank": _run_unblank,
     "osd open": _run_osd_open,
+    "osd key": _run_osd_key,
     "osd close": _run_osd_close,
     "osd where": _run_osd_where,
 }
@@ -352,6 +393,8 @@ def _report_success(environment: Environment, command: str, outcome: Outcome, as
         print(json.dumps(document), file=environment.stdout)
     else:
         print(outcome.text, file=environment.stdout)
+        for warning in outcome.warnings:
+            print(f"warning: {warning}", file=environment.stderr)
 
 
 def _report_failure(environment: Environment, command: str | None, error: XeneonError, as_json: bool) -> int:

@@ -31,11 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   power mode back and writes `01` at once if DDC/CI stops answering. The way back
   over USB-C (DisplayPort Alt Mode) is untested and documented as a limitation.
 - The DDC/CI transport writes VCP `0xD6` only with the values `01` and `05`.
-- Commands `osd open`, `osd where` and `osd close` for the on-screen menu. `osd
-  open` and `osd close` press `back` three times (and `select` to open) over HID,
-  150 ms apart under the writer lock. The tool tracks the menu in
-  `$XDG_RUNTIME_DIR/xeneon-edge-osd.json`, replaced atomically; a press that
-  fails leaves the state marked unknown. `osd where` prints the tracked state
-  without touching the display. The HID allowlist admits exactly the four OSD key
-  frames.
+- Commands `osd open`, `osd key`, `osd where` and `osd close` press the four OSD
+  keys over HID (`select`, `right`, `left`, `back`), so the on-screen menu can be
+  worked from the computer. The tool tracks the cursor in
+  `$XDG_RUNTIME_DIR/xeneon-edge-osd.json`, checks a whole `--repeat` run before
+  it sends the first key, and refuses keys when the state is unknown (an open
+  menu more than 8 s after the last key, a missing or unreadable state file, a
+  failed press, a Reset). `select` on the menu entry Reset, and any `select` in
+  Misc after the cursor has touched Reset, needs `--confirm-reset`. The HID
+  allowlist admits exactly the four key frames.
 - Runs on Python 3.11 or newer; CI runs the tests on 3.11 to 3.14.

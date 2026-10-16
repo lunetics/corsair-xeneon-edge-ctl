@@ -10,10 +10,9 @@ are trademarks of their respective owners.
 
 ## Status
 
-Pre-release. `status`, `get`, `set`, the `profile` commands, `blank`/`unblank`
-and the `osd open`, `osd where` and `osd close` commands for the on-screen menu
-work. Pressing single menu keys (`osd key`) is planned; the full design is in
-[docs/design.md](docs/design.md).
+Pre-release. `status`, `get`, `set`, the `profile` commands,
+`blank`/`unblank` and the `osd` commands for the on-screen menu keys work. The
+full design is in [docs/design.md](docs/design.md).
 
 ## Requirements
 
@@ -59,7 +58,7 @@ xeneon-edge-ctl profile apply work
 xeneon-edge-ctl blank
 xeneon-edge-ctl unblank
 xeneon-edge-ctl osd open
-xeneon-edge-ctl osd close
+xeneon-edge-ctl osd key right --repeat 2
 ```
 
 Every command that writes reads the value back and fails with exit code 6 on a
@@ -72,7 +71,10 @@ commands, settings, exit codes and files are listed in the
 The Xeneon Edge has no buttons, so a command that resets the display or switches
 it off can only be undone through software or by unplugging it. The tool refuses
 the factory reset, the "restore defaults" commands and input switching (exit
-code 3); see [docs/design.md](docs/design.md#safety).
+code 3); see [docs/design.md](docs/design.md#safety). The menu entry "Reset"
+is not pressed by accident either: `osd key select` on it needs
+`--confirm-reset`, which only a person should give; see
+[Reset](docs/cli.md#reset).
 
 > [!WARNING]
 > The way back after `blank` is tested only over DisplayPort. Over USB-C

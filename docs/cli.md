@@ -45,11 +45,12 @@ The options work before or after the command.
 | `blank` | Switch the picture off, see [blank and unblank](#blank-and-unblank). |
 | `unblank` | Switch the picture back on. |
 | `osd open [--dcr on\|off]` | Open the on-screen menu on Picture, see [osd](#osd-the-on-screen-menu). |
+| `osd key <key> [--repeat N] [--confirm-reset]` | Press one OSD key once or `N` times. |
 | `osd where` | Print the tracked state of the on-screen menu. Reads one file; no device access, no lock. |
 | `osd close` | Close the on-screen menu. |
 
 Commands that write (`set`, `profile apply`, `blank`, `unblank`, `osd open`,
-`osd close`) take an exclusive lock on `$XDG_RUNTIME_DIR/xeneon-edge.lock`. If another writer holds
+`osd key`, `osd close`) take an exclusive lock on `$XDG_RUNTIME_DIR/xeneon-edge.lock`. If another writer holds
 it, the command exits with code 7 after about two seconds.
 
 ## Settings
@@ -101,43 +102,92 @@ it, the command exits with code 7 after about two seconds.
 
 The `osd` commands work the display's on-screen menu with its four keys over
 HID. The display does not report where the menu cursor is, so the tool tracks
-it in a state file. The menu model and the reasoning are in
-[design.md](design.md#osd-key-control). Pressing single keys (`osd key`) follows
-in the next release step.
+it in a state file and refuses keys whose effect it cannot predict. The menu
+model and the reasoning are in [design.md](design.md#osd-key-control).
 
 ```sh
 xeneon-edge-ctl osd open
+xeneon-edge-ctl osd key right --repeat 2
+xeneon-edge-ctl osd key select
 xeneon-edge-ctl osd where
 xeneon-edge-ctl osd close
 ```
 
-The menu has the pages Picture, Colour, Display, Audio and Misc. With Dynamic
-Contrast Ratio (DCR) on, entering Picture starts on Sharpness; the display
-cannot report DCR, so the tool assumes it is off unless you say
-`osd open --dcr on`.
+### Keys
+
+| Key | Effect |
+|---|---|
+| `select` | Opens the menu; enters a page; starts editing an entry; keeps an edited value. |
+| `right` | Next page or entry; while editing, one step up. |
+| `left` | Previous page or entry; while editing, one step down. |
+| `back` | Discards an edit; leaves a page; closes the menu. Harmless on a closed menu. |
+
+The menu has the pages Picture, Colour, Display, Audio and Misc. Pages and
+entries are rings: `right` on the last one goes to the first. Entering a page
+starts on its first entry. With Dynamic Contrast Ratio (DCR) on, entering
+Picture starts on Sharpness; the display cannot report DCR, so the tool assumes
+it is off unless you say `osd open --dcr on`.
+
+### Commands
 
 - `osd open [--dcr on|off]` presses `back` three times and then `select`, so
   the menu is open on Picture whatever state it was in. It always works, starts
-  a new tracked state and clears the Reset mark.
+  a new tracked state and clears the Reset mark (see below).
+- `osd key <select|left|right|back> [--repeat N] [--confirm-reset]` presses
+  the key once, or `N` times (1 to 50; anything else is a usage error, exit
+  code 2). The tool checks every step of a `--repeat` run before it sends the
+  first key; if a step is refused, nothing is sent. The output names the keys
+  sent and the cursor afterwards.
 - `osd where` prints the tracked state: the menu level, the page and entry the
   cursor is on, the DCR assumption, whether the cursor has been on Reset, and
   whether the state is still known (if not, why). It sends nothing, takes no
-  lock and never changes the state file. A missing or unreadable state file is an
-  unknown state, not an error.
+  lock and never changes the state file.
 - `osd close` presses `back` three times, so the menu is closed. It always
   works and clears the Reset mark.
 
-Keys within one command are sent 150 ms apart. `osd open` and `osd close` hold
-the writer lock from the first key to the last. They use HID only, never
-DDC/CI; `--ddc-bus` is accepted and ignored. If a press fails, the state file
-says the position is unknown until the next `osd open` or `osd close`.
+Keys within one command are sent 150 ms apart. `osd open`, `osd key` and
+`osd close` hold the writer lock from the first key to the last. They use HID
+only, never DDC/CI; `--ddc-bus` is accepted and ignored.
 
-With `--json`, `data` of `osd open` and `osd close` holds `keys` (the keys sent,
-in order) and `state`. `state` has `level` (`closed`, `pages`, `entries` or
-`editing`), `page`, `entry`, `dcr`, `reset_touched`, `last_key_time` and
-`unknown_reason` (`null` unless the position cannot be trusted). `osd where` has
-`state`, `known`, `reason` (why the state is unknown, else `null`) and `age_s`
-(seconds since the last key, or `null`).
+### When a key is refused
+
+A refusal exits with code 3 and sends nothing.
+
+- **Unknown state.** `osd key` refuses every key when the menu is tracked as
+  open and the last key is more than 8 seconds old (the menu closes itself
+  after "Menu Time", 10 seconds at the least, so a later key would land
+  somewhere else), when the state file is missing or unreadable, after a
+  failed key press, and after a confirmed Reset. Run `osd open`. A closed menu
+  stays known however old the state is.
+- **Closed menu.** `select` opens the menu on Picture and `back` changes
+  nothing. `left` and `right` are refused: their effect on a closed menu is not
+  measured.
+
+### Reset
+
+"Reset" is the last entry of the Misc page and resets the display. What it
+resets, and whether the display still answers afterwards, is not measured.
+
+- Moving the cursor onto Reset is allowed and prints a warning.
+- `select` on Reset is refused unless you pass `--confirm-reset`. Pass it by
+  hand only, never from a script, a test against hardware or an automated task.
+- A key press can get lost (measured: about 1 % at most), leaving the real
+  cursor on Reset while the tracked cursor has moved on. So once the tracked
+  cursor has been on Reset, every `select` in the Misc page (the page list on
+  Misc included) needs `--confirm-reset` until the next `osd open` or
+  `osd close`.
+- After a confirmed Reset the state is unknown; `osd open` or `osd close` start
+  over.
+
+### Output
+
+With `--json`, `data` of `osd open`, `osd key` and `osd close` holds `keys` (the
+keys sent, in order) and `state`; `osd key` adds `warnings`. `state` has
+`level` (`closed`, `pages`, `entries` or `editing`), `page`, `entry`, `dcr`,
+`reset_touched`, `last_key_time` and `unknown_reason` (`null` unless the
+position cannot be trusted). `osd where` has `state`, `known`, `reason` (why the
+state is unknown, else `null`) and `age_s` (seconds since the last key, or
+`null`). In text mode warnings go to stderr.
 
 ```text
 $ xeneon-edge-ctl osd where
@@ -177,13 +227,14 @@ The tool refuses to send the factory-reset frame (HID `0x0F FF`), the VCP codes
 `0x04`, `0x05`, `0x06`, `0x08` and `0x60`, and any value but `01` and `05` for
 VCP `0xD6` (exit code 3). The reasons are in
 [design.md](design.md#safety). The HID transport sends nothing in group `01`
-except the four OSD key frames.
+except the four OSD key frames. `select` on the OSD entry Reset is refused
+without `--confirm-reset`, see [Reset](#reset).
 
 ## Files
 
 | Path | Content |
 |---|---|
 | `$XDG_RUNTIME_DIR/xeneon-edge.lock` | Writer lock |
-| `$XDG_RUNTIME_DIR/xeneon-edge-osd.json` | Tracked state of the on-screen menu, replaced atomically before the first key and when a command ends |
+| `$XDG_RUNTIME_DIR/xeneon-edge-osd.json` | Tracked state of the on-screen menu, replaced atomically before the first key and after every key |
 | `$XDG_CONFIG_HOME/corsair-xeneon-edge-ctl/profiles/<name>.json` | Profiles (`~/.config` when unset) |
 | `$XDG_STATE_HOME/corsair-xeneon-edge-ctl/last-apply.json` | Journal of the last `profile apply` (`~/.local/state` when unset) |

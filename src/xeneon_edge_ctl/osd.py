@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Protocol
 
 from xeneon_edge_ctl import lock
-from xeneon_edge_ctl.errors import RefusedError, TransportError, UsageError
+from xeneon_edge_ctl.errors import DeviceNotFoundError, RefusedError, TransportError, UsageError
 from xeneon_edge_ctl.transport import hid
 
 
@@ -98,6 +98,7 @@ MAX_REPEAT = 50
 
 REASON_RESET = "Reset was selected; what the display does afterwards is not measured"
 REASON_INTERRUPTED = "a key sequence started and did not finish, so the cursor position is unknown"
+REASON_SEND_FAILED = "a key press failed, so the cursor position is unknown"
 
 
 @dataclass(frozen=True)
@@ -450,6 +451,46 @@ def _remember(path: Path, state: OsdState, *, key_sent: bool) -> None:
         if not key_sent:
             raise
         raise TransportError(f"{error}; the key was already sent, so the menu state is unknown: {OPEN_HINT}") from None
+
+
+def _mark_unknown(path: Path, state: OsdState, reason: str) -> None:
+    """Best effort: a failed save here must not hide the error that got us here."""
+    try:
+        save_state(path, dataclasses.replace(state, unknown_reason=reason))
+    except TransportError:
+        pass
+
+
+def send_plan(
+    presser: KeyPresser,
+    path: Path,
+    state: OsdState,
+    plan: Plan,
+    clock: Callable[[], datetime],
+    sleep: Callable[[float], None],
+) -> OsdState:
+    """Send a checked plan, one key at a time, and keep the state file in step with the display.
+
+    The state is written once before the first key, so a file that cannot be written stops the run
+    with nothing sent, and again after every key. If a press fails, the position is no longer
+    certain (the key may or may not have arrived), so the last good state is saved as unknown.
+    Returns the state after the last key.
+    """
+    save_state(path, state)
+    current = state
+    for number, step in enumerate(plan.steps):
+        if number:
+            sleep(KEY_SPACING_S)
+        try:
+            presser.press_key(KEY_SELECTORS[step.key])
+        except (RefusedError, DeviceNotFoundError):
+            raise  # raised before anything is written to the display
+        except BaseException:
+            _mark_unknown(path, current, REASON_SEND_FAILED)
+            raise
+        current = dataclasses.replace(step.after, last_key_time=clock())
+        _remember(path, current, key_sent=True)
+    return current
 
 
 def send_sequence(

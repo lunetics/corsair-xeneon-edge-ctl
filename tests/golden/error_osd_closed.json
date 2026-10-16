@@ -1,0 +1,1 @@
+{"ok": false, "command": "osd key", "data": null, "error": {"code": "refused", "message": "step 1 of 3 (left): left on a closed menu is refused: its effect is not measured; open it with 'osd open'; nothing was sent"}}

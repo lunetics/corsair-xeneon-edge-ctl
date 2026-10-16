@@ -1,0 +1,1 @@
+{"ok": true, "command": "osd key", "data": {"keys": ["right"], "state": {"level": "entries", "page": "Misc", "entry": "Reset", "dcr": false, "reset_touched": true, "last_key_time": "2026-10-15T12:30:00+00:00", "unknown_reason": null}, "warnings": ["the cursor is on Reset; 'select' there needs --confirm-reset and resets the display"]}, "error": null}

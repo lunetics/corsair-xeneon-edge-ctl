@@ -1,0 +1,1 @@
+{"ok": true, "command": "osd key", "data": {"keys": ["right", "right"], "state": {"level": "pages", "page": "Display", "entry": null, "dcr": false, "reset_touched": false, "last_key_time": "2026-10-15T12:30:00.150000+00:00", "unknown_reason": null}, "warnings": []}, "error": null}

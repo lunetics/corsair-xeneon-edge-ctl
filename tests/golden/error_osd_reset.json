@@ -1,0 +1,1 @@
+{"ok": false, "command": "osd key", "data": null, "error": {"code": "refused", "message": "step 1 of 1 (select): select on Reset is refused without --confirm-reset; nothing was sent (only a person may pass --confirm-reset, never an automated task)"}}

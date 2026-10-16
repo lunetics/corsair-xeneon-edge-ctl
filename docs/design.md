@@ -1,6 +1,6 @@
 # Design
 
-Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`. Not yet implemented: OSD navigation.
+Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`. Not yet implemented: OSD key control (`osd`). Settings that exist only in the on-screen menu follow in a later version.
 
 ## Contents
 
@@ -11,6 +11,7 @@ Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `p
 - [Command-line contract](#command-line-contract)
 - [Single writer](#single-writer)
 - [Profiles](#profiles)
+- [OSD key control](#osd-key-control)
 - [Safety](#safety)
 - [Testing and acceptance](#testing-and-acceptance)
 
@@ -33,7 +34,7 @@ so the tool always reads the current value from the device.
 |---|---|---|
 | USB HID (`/dev/hidraw*`) | 64-byte reports; command `0x0E` reads the screen state, `0x0F` writes (group `01` OSD keys, `02` sliders 0–100, `03` RGB gains 0–255) | exact RGB gains, OSD brightness, OSD key presses |
 | DDC/CI (`ddcutil`) | MCCS VCP codes over the video cable | backlight, contrast, sharpness, colour preset, OSD language, power mode |
-| OSD key navigation | HID key presses through the on-screen menu | settings without HID or DDC/CI access (later version) |
+| OSD key navigation | HID key presses through the on-screen menu | working the menu by hand ([OSD key control](#osd-key-control)); settings without HID or DDC/CI access (later version) |
 
 Known traps:
 
@@ -79,8 +80,8 @@ output formats.
 ```text
 cli ──► apply ──► profile ──► state ──► model ──► transport.hid
    ├──► power ─────────────────┘                └► transport.ddc
-   └──► lock
-osd (later) ──► transport.hid
+   ├──► lock
+   └──► osd ──► transport.hid
 ```
 
 - `transport.hid`: finds the hidraw node by vendor and product ID, sends and
@@ -95,6 +96,8 @@ osd (later) ──► transport.hid
   of the last apply.
 - `power`: `blank` and `unblank` over VCP `0xD6` (see [Safety](#safety)).
 - `lock`: the single-writer lock (see [Single writer](#single-writer)).
+- `osd`: the menu model, the tracked cursor state and the key planning (see
+  [OSD key control](#osd-key-control)).
 - `cli`: commands, `--json` output, exit codes.
 
 ## Command-line contract
@@ -110,6 +113,7 @@ Command name: `xeneon-edge-ctl`.
 | `profile apply <name>` | write a profile in a fixed order and verify it |
 | `profile list` / `profile show <name>` | list or print stored profiles |
 | `blank` / `unblank` | power mode off/on via VCP `0xD6` (see [Safety](#safety)) |
+| `osd open` / `osd key` / `osd where` / `osd close` | work the on-screen menu (see [OSD key control](#osd-key-control)) |
 
 `--json` prints exactly one JSON object on stdout:
 
@@ -170,6 +174,89 @@ Details of the implementation:
   `profile list` and `profile show` read files only; `profile save` reads the
   device and takes no lock, because it writes nothing to the display.
 
+## OSD key control
+
+The `osd` commands press the four OSD keys over HID, so a user can work the
+on-screen menu from the computer and watch the result on the display. The
+display does not report the menu state, so the tool tracks where the cursor is
+and refuses key presses whose effect it cannot predict.
+
+### Keys
+
+A key is a `0x0F` write with group `01` and no value byte:
+`01 0F 00 00 00 00 01 <selector>`, the rest zero. Measured on the device:
+
+| Key | Selector | Effect |
+|---|---|---|
+| `select` | `00` | opens the menu; enters a page; starts editing an entry; keeps an edited value |
+| `right` | `01` | next category or entry; while editing, one step up |
+| `left` | `02` | previous category or entry; while editing, one step down |
+| `back` | `03` | discards an edit; leaves a page; closes the menu; harmless when the menu is closed |
+
+The transport allowlist admits exactly these four frames.
+
+### Menu model
+
+| Page | Entries, in order |
+|---|---|
+| Picture | Brightness, Contrast, Sharpness, Effect |
+| Colour | Temperature, R, G, B, Saturation |
+| Display | Low Blue Light, Aspect, DCR, Rotate, OD |
+| Audio | Volume, Mute, Audio Source |
+| Misc | Language, Menu Time, OSD H Position, OSD V Position, Reset |
+
+- The menu has three levels: pages, entries, editing. Opening always starts on
+  Picture; entering a page always starts on its first entry.
+- Pages and entries are rings: `left` on the first item goes to the last, `right`
+  on the last goes to the first.
+- While editing, `left` and `right` change the value at once; `select` keeps it,
+  `back` restores the previous value. Both return to the entry.
+- With DCR on, entering Picture lands on Sharpness instead of Brightness. The
+  DCR state cannot be read; the tool assumes off unless `osd open --dcr on` says
+  otherwise.
+- The menu closes itself after "Menu Time" (10 to 60 s, 20 s by default) without
+  a key press. Keys sent after that land somewhere else.
+
+### Commands
+
+| Command | Effect |
+|---|---|
+| `osd open [--dcr on\|off]` | `back` three times, then `select`: the menu is open on Picture |
+| `osd key <key> [--repeat N] [--confirm-reset]` | press `select`, `left`, `right` or `back` once or `N` times (1 to 50) |
+| `osd where` | print the tracked state; sends nothing and takes no lock |
+| `osd close` | `back` three times: the menu is closed |
+
+- The tracked state lives in `$XDG_RUNTIME_DIR/xeneon-edge-osd.json`: level, page,
+  entry, the DCR assumption, whether the cursor has been on Reset, and the time
+  of the last key. It is replaced atomically.
+- The state is **unknown** when the menu is tracked as open and the last key is
+  more than 8 s old (below the shortest Menu Time), when the file is missing or
+  unreadable, and after Reset was selected. `osd key` then refuses with exit code
+  3 and asks for `osd open`. `osd open` and `osd close` always work.
+- With the menu tracked as closed, `select` opens it on Picture and `back` does
+  nothing; `left` and `right` are refused with exit code 3, because their effect
+  on a closed menu is not measured.
+- `osd key` plans every step of a `--repeat` run and checks it before the first
+  key is sent; a refused step sends nothing.
+- Keys within one command are 150 ms apart. Every command that sends keys holds
+  the writer lock for the whole sequence.
+- The JSON `data` of `osd open`, `osd key` and `osd close` names the keys sent and
+  the tracked state afterwards; `osd where` adds whether the state is known and
+  its age.
+
+### Reset
+
+"Reset" in the Misc page resets the display; what it resets and whether the
+display still answers afterwards is not measured. Moving the cursor onto Reset
+is allowed and prints a warning. `select` on Reset sends nothing and exits with
+code 3 unless `--confirm-reset` is given.
+
+A lost key press (the measured upper bound is about 1 %) can leave the real
+cursor on Reset while the tracked cursor moved on. Therefore, once the tracked
+cursor has been on Reset, every `select` in the Misc page needs
+`--confirm-reset` until the next `osd open` or `osd close`. After a confirmed
+Reset the state is unknown.
+
 ## Safety
 
 The Xeneon Edge has no buttons. A command that switches it off or resets it can
@@ -178,13 +265,16 @@ only be undone through software or by unplugging it. The tool therefore refuses:
 | Command | Reason |
 |---|---|
 | HID `0x0F FF` | the vendor software sends it for its reset function |
-| OSD entry "Reset" | factory reset; also the neighbour of "Language" in the menu, so the tool sets the language over DDC/CI only |
 | VCP `0x04`, `0x05`, `0x06`, `0x08` | MCCS "restore factory defaults" family |
 | VCP `0x60` | input source; no tested way back |
 | VCP `0xD6` with any value but `01` and `05` | only these two are measured; the transport checks the value, not only the code |
 
 Each refusal has a test that sends the command through the public interface and
 checks that nothing reaches the transport.
+
+The OSD entry "Reset" is not refused outright: `select` on it needs
+`--confirm-reset` (see [Reset](#reset)). "Reset" is the neighbour of "Language"
+in the Misc page, so `set language` uses DDC/CI only and never the menu.
 
 `blank` writes VCP `0xD6` = `05` under the writer lock. In one test on a DisplayPort connection the
 display went dark, kept answering DDC/CI (reading `0xD6` = `04`), and `0xD6` = `01` brought
@@ -205,4 +295,9 @@ connection is not tested yet; the tool does not detect the connector.
   - profile round trip, 20 runs without a difference;
   - every refused command is refused;
   - two writers started together: one succeeds, one exits with code 7;
-  - `blank`/`unblank` on each connection type that the documentation claims.
+  - `blank`/`unblank` on each connection type that the documentation claims;
+  - `osd`: open, walk every page and back, edit one value and discard it (the
+    value read over DDC/CI stays unchanged), the tracked state matches the
+    screen, a key after more than 8 s is refused, `select` on Reset without
+    `--confirm-reset` sends nothing. `--confirm-reset` is never used in
+    acceptance.

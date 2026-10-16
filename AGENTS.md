@@ -15,10 +15,14 @@ before changing behaviour.
 - Never run the tool, `ddcutil` or any HID write against a real display from an
   automated task. Tests use fakes for every transport.
 - Never send, and never add a code path that sends: HID `0x0F FF` (factory
-  reset), the OSD "Reset" entry, DDC/CI VCP `0x04`, `0x05`, `0x06`, `0x08`
-  (restore defaults) or VCP `0x60` (input source). The display has no buttons to
-  recover from these.
-- Every refused command keeps a test that proves the refusal.
+  reset), DDC/CI VCP `0x04`, `0x05`, `0x06`, `0x08` (restore defaults) or VCP
+  `0x60` (input source). The display has no buttons to recover from these.
+- `select` on the OSD "Reset" entry is sent only with `--confirm-reset`, which a
+  person gives by hand. Never pass `--confirm-reset` from an automated task, a
+  test against hardware or an acceptance run. See
+  [docs/design.md](docs/design.md#reset).
+- Every refused command keeps a test that proves the refusal; the Reset
+  confirmation keeps a test that proves nothing is sent without it.
 - Read the display state from the device; never trust a cached value. The
   display does not report changes.
 - Find the DDC/CI bus by the monitor identity `CRX:XENEON EDGE`, never by a bus

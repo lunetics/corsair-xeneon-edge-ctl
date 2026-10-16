@@ -22,91 +22,59 @@ Pre-release. `status`, `get`, `set`, the `profile` commands and
 - The udev rule in [packaging/udev/](packaging/udev/) for HID access as a
   normal user
 
-## Usage
+## Installation
 
-From a checkout (`xeneon-edge-ctl` is the console script that installing the
-package provides):
+Install the `xeneon-edge-ctl` command with [pipx](https://pipx.pypa.io/):
 
 ```sh
-PYTHONPATH=src python3 -m xeneon_edge_ctl status
-PYTHONPATH=src python3 -m xeneon_edge_ctl get contrast
-PYTHONPATH=src python3 -m xeneon_edge_ctl set contrast 60
-PYTHONPATH=src python3 -m xeneon_edge_ctl set preset user --json
-PYTHONPATH=src python3 -m xeneon_edge_ctl profile save work
-PYTHONPATH=src python3 -m xeneon_edge_ctl profile apply work
-PYTHONPATH=src python3 -m xeneon_edge_ctl blank
-PYTHONPATH=src python3 -m xeneon_edge_ctl unblank
+git clone https://github.com/lunetics/corsair-xeneon-edge-ctl.git
+cd corsair-xeneon-edge-ctl
+pipx install .
 ```
 
-- `status` reads every setting and reports the HID node, the DDC/CI bus and the
-  firmware. The RGB gains come from HID (the effective gains); the gains DDC/CI
-  reports are listed separately as "stored user gains".
-- `get <setting>` reads one setting.
-- `set <setting> <value>` writes one setting, reads it back and exits with code
-  6 if the value differs. It takes an exclusive lock on
-  `$XDG_RUNTIME_DIR/xeneon-edge.lock`; if another writer holds it, the command
-  exits with code 7 after about two seconds.
-- `profile ...`, `blank` and `unblank` are described [below](#profiles).
+Give the logged-in user access to the display's HID interface:
 
-| Setting | Values | Written through |
-|---|---|---|
-| `backlight`, `contrast` | 0-100 | DDC/CI |
-| `brightness` | 0-100 (the OSD entry "Brightness") | HID |
-| `sharpness` | 0-4 | DDC/CI |
-| `preset` | `user` or a raw value such as `0x0b` | DDC/CI |
-| `language` | `english` or a raw value such as `0x02` | DDC/CI |
-| `red`, `green`, `blue` | 0-255 | HID |
-
-The DDC/CI bus is found by the monitor identity `CRX:XENEON EDGE`. `--ddc-bus N`
-selects a bus explicitly; the tool still checks that the display is on it.
-
-With `--json`, stdout carries exactly one object:
-
-```json
-{"ok": true, "command": "get", "data": {"setting": "contrast", "value": 50}, "error": null}
+```sh
+sudo install -m 0644 packaging/udev/61-corsair-xeneon-edge-ctl.rules /etc/udev/rules.d/
+sudo udevadm control --reload
+sudo udevadm trigger --subsystem-match=hidraw --action=add
 ```
 
-On failure `ok` is `false`, `data` is `null` and `error` holds `code` and
-`message`. Exit codes: 0 success, 1 unexpected error, 2 usage error, 3 refused
-by a safety rule, 4 display not found or no access, 5 I/O or protocol error,
-6 value read back differs, 7 another writer holds the lock.
+`ddcutil detect --brief` must list `CRX:XENEON EDGE` when run as your user; if
+it reports missing permissions, see
+[ddcutil: I2C permissions](https://www.ddcutil.com/i2c_permissions/).
 
-The tool refuses to send the factory-reset frame (HID `0x0F FF`), the VCP
-codes `0x04`, `0x05`, `0x06`, `0x08` and `0x60`, and any value but `01` and `05`
-for VCP `0xD6`; see [docs/design.md](docs/design.md#safety).
+To run from the checkout without installing, use
+`PYTHONPATH=src python3 -m xeneon_edge_ctl` in place of `xeneon-edge-ctl`.
 
-### Profiles
+## Quick start
 
-- `profile save <name>` reads every setting from the display and stores it in
-  `$XDG_CONFIG_HOME/corsair-xeneon-edge-ctl/profiles/<name>.json` (`~/.config`
-  when the variable is unset). Names are 1 to 64 letters, digits, `-` or `_`.
-  An existing profile is refused (exit code 2) unless you pass `--force`.
-- `profile apply <name>` checks the whole file first (unknown or out-of-range
-  values exit with code 2 before anything is written). Then it takes the writer
-  lock and writes the colour preset, then the RGB gains, then the other settings.
-  Values that already match are skipped, every written value is read back, and a
-  failed value does not stop the run: all failures are reported. Exit code 6 if a
-  value differs afterwards, 5 on an I/O error, 7 if another writer holds the lock.
-  What was read, written and read back is recorded in
-  `$XDG_STATE_HOME/corsair-xeneon-edge-ctl/last-apply.json` (`~/.local/state`
-  when unset); only the last apply is kept.
-- `profile list` and `profile show <name>` read the files only; they take no lock
-  and do not touch the display.
+```sh
+xeneon-edge-ctl status
+xeneon-edge-ctl get contrast
+xeneon-edge-ctl set contrast 60
+xeneon-edge-ctl profile save work
+xeneon-edge-ctl profile apply work
+xeneon-edge-ctl blank
+xeneon-edge-ctl unblank
+```
 
-### blank and unblank
+Every command that writes reads the value back and fails with exit code 6 on a
+difference. `--json` prints one JSON object per command for scripts. All
+commands, settings, exit codes and files are listed in the
+[command-line reference](docs/cli.md).
 
-- `blank` switches the picture off by writing VCP `0xD6` = `05` under the writer
-  lock, then reads `0xD6` (the measured answer is `04`: the display is dark but
-  DDC/CI keeps answering). If the read fails or times out, the tool writes
-  `0xD6` = `01` at once and exits with code 5; the display may then need a power
-  cycle.
-- `unblank` writes `0xD6` = `01` and exits with code 6 unless it reads `01` back.
-- **Limitation:** the way back after `blank` was tested only on a DisplayPort
-  connection. Over USB-C (DisplayPort Alt Mode) it is untested; the tool does
-  not detect the connector, so try `blank` there only with a plan to unplug the
-  display.
-- The tool writes `0xD6` only with the values `01` and `05` and refuses all
-  others (exit code 3).
+## Safety
+
+The Xeneon Edge has no buttons, so a command that resets the display or switches
+it off can only be undone through software or by unplugging it. The tool refuses
+the factory reset, the "restore defaults" commands and input switching (exit
+code 3); see [docs/design.md](docs/design.md#safety).
+
+> [!WARNING]
+> The way back after `blank` is tested only over DisplayPort. Over USB-C
+> (DisplayPort Alt Mode) it is untested; see
+> [blank and unblank](docs/cli.md#blank-and-unblank).
 
 ## Documentation
 

@@ -28,4 +28,4 @@ before changing behaviour.
 
 - Code, comments, documentation and commit messages are in English.
 - No code copied from other projects; protocol constants need evidence.
-- Commit messages: see [CONTRIBUTING.md](CONTRIBUTING.md#commits).
+- Commit messages: see [CONTRIBUTING.md](.github/CONTRIBUTING.md#commits).

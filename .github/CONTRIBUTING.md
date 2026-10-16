@@ -20,7 +20,7 @@ state read before and restored after.
 
 Some commands can reset or switch off the display, and the Xeneon Edge has no
 buttons to recover from that. The commands the tool refuses are listed in
-[docs/design.md](docs/design.md#safety); every refused command has a test that
+[docs/design.md](../docs/design.md#safety); every refused command has a test that
 proves the refusal.
 
 ## Code provenance

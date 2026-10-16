@@ -114,8 +114,8 @@ for VCP `0xD6`; see [docs/design.md](docs/design.md#safety).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-and [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](.github/CONTRIBUTING.md), [CODE_OF_CONDUCT.md](.github/CODE_OF_CONDUCT.md)
+and [SECURITY.md](.github/SECURITY.md).
 
 ## License
 

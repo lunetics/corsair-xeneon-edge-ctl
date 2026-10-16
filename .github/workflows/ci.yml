@@ -20,3 +20,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Unit tests (no hardware)
         run: PYTHONPATH=src python -m unittest discover -s tests -v
+      - name: Build, install and start the console script
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install .
+          "$RUNNER_TEMP/venv/bin/xeneon-edge-ctl" --version

@@ -26,3 +26,8 @@ xeneon-edge-ctl = "xeneon_edge_ctl.cli:main"
 [project.urls]
 Homepage = "https://github.com/lunetics/corsair-xeneon-edge-ctl"
 Changelog = "https://github.com/lunetics/corsair-xeneon-edge-ctl/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+# The distribution name (corsair-xeneon-edge-ctl) differs from the import
+# package (xeneon_edge_ctl), so hatchling cannot find the package by itself.
+packages = ["src/xeneon_edge_ctl"]

@@ -292,12 +292,12 @@ def _after_text(state_: osd.OsdState) -> str:
     return text
 
 
-def _run_osd_open(args: argparse.Namespace, environment: Environment) -> Outcome:
-    dcr = args.dcr == "on"
+def _open_menu(environment: Environment, dcr: bool) -> osd.OsdState:
+    """``osd open``: lock, then ``back`` three times and ``select``. Shared with ``osd interactive``."""
     path = osd.state_path(environment.env)
     with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
         hid_transport = _open_hid(environment)
-        final = osd.send_sequence(
+        return osd.send_sequence(
             hid_transport,
             path,
             osd.load_state(path),
@@ -306,16 +306,15 @@ def _run_osd_open(args: argparse.Namespace, environment: Environment) -> Outcome
             environment.clock,
             environment.sleep,
         )
-    data: dict[str, object] = {"keys": [key.value for key in osd.OPEN_KEYS], "state": osd.state_summary(final)}
-    return Outcome(data, f"menu opened on Picture (DCR assumed {'on' if dcr else 'off'})")
 
 
-def _run_osd_close(args: argparse.Namespace, environment: Environment) -> Outcome:
+def _close_menu(environment: Environment) -> osd.OsdState:
+    """``osd close``: lock, then ``back`` three times. Shared with ``osd interactive``."""
     path = osd.state_path(environment.env)
     with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
         hid_transport = _open_hid(environment)
         previous = osd.load_state(path)
-        final = osd.send_sequence(
+        return osd.send_sequence(
             hid_transport,
             path,
             previous,
@@ -324,20 +323,36 @@ def _run_osd_close(args: argparse.Namespace, environment: Environment) -> Outcom
             environment.clock,
             environment.sleep,
         )
+
+
+def _press_keys(environment: Environment, key: osd.Key, repeat: int, confirm_reset: bool) -> tuple[osd.Plan, osd.OsdState]:
+    """``osd key``: the state file is read and the whole run planned while no other writer can change it,
+    and before any key is sent. Shared with ``osd interactive``."""
+    path = osd.state_path(environment.env)
+    with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
+        current = osd.load_state(path)
+        plan = osd.plan_keys(current, environment.clock(), key, repeat, confirm_reset)
+        final = osd.send_plan(_open_hid(environment), path, current, plan, environment.clock, environment.sleep)
+    return plan, final
+
+
+def _run_osd_open(args: argparse.Namespace, environment: Environment) -> Outcome:
+    dcr = args.dcr == "on"
+    final = _open_menu(environment, dcr)
+    data: dict[str, object] = {"keys": [key.value for key in osd.OPEN_KEYS], "state": osd.state_summary(final)}
+    return Outcome(data, f"menu opened on Picture (DCR assumed {'on' if dcr else 'off'})")
+
+
+def _run_osd_close(args: argparse.Namespace, environment: Environment) -> Outcome:
+    final = _close_menu(environment)
     data: dict[str, object] = {"keys": [key.value for key in osd.CLOSE_KEYS], "state": osd.state_summary(final)}
     return Outcome(data, "menu closed")
 
 
 def _run_osd_key(args: argparse.Namespace, environment: Environment) -> Outcome:
-    # Usage first (range of --repeat), then the lock, then the state-dependent checks: the state file
-    # is read and the whole run planned while no other writer can change it, and before any key is sent.
+    # Usage first (range of --repeat), then the lock and the state-dependent checks.
     osd.check_repeat(args.repeat)
-    key = osd.Key(args.key)
-    path = osd.state_path(environment.env)
-    with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
-        current = osd.load_state(path)
-        plan = osd.plan_keys(current, environment.clock(), key, args.repeat, args.confirm_reset)
-        final = osd.send_plan(_open_hid(environment), path, current, plan, environment.clock, environment.sleep)
+    plan, final = _press_keys(environment, osd.Key(args.key), args.repeat, args.confirm_reset)
     keys = [step.key for step in plan.steps]
     data: dict[str, object] = {
         "keys": [sent.value for sent in keys],

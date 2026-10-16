@@ -146,6 +146,10 @@ class Terminal(Protocol):
         """Put the original settings back. Safe to call more than once and before ``set_cbreak``."""
         ...
 
+    def discard_input(self) -> None:
+        """Drop the input that has arrived and not been read yet; the terminal mode stays as it is."""
+        ...
+
 
 class Menu(Protocol):
     """The OSD side of the session: the same lock, load, plan and send path as the ``osd`` commands.
@@ -246,18 +250,25 @@ class _Session:
                 self.terminal.write("\n")
 
     def _act(self, action: Action) -> bool:
-        """Do what ``action`` says; True when the session is to end."""
+        """Do what ``action`` says; True when the session is to end.
+
+        Whatever the outcome (done, refused, failed), the input that arrived meanwhile is dropped: a held
+        key repeats about 30 times a second, and a key pressed every 150 ms or so would otherwise leave
+        the menu moving after the key is released.
+        """
+        ends = False
         try:
             if action is Action.OPEN:
                 self.menu.open(self.dcr)
             elif action is Action.QUIT:
                 self.menu.close()
-                return True
+                ends = True
             else:
                 self._press(_ACTION_KEYS[action])
         except XeneonError as error:
             self.message = _failure_text(error)
-        return False
+        self.terminal.discard_input()
+        return ends
 
     def _press(self, key: osd.Key) -> None:
         try:
@@ -357,6 +368,9 @@ class PosixTerminal:
     def restore(self) -> None:
         if self._saved is not None:
             termios.tcsetattr(self.input_fd, termios.TCSAFLUSH, self._saved)
+
+    def discard_input(self) -> None:
+        termios.tcflush(self.input_fd, termios.TCIFLUSH)
 
 
 def open_terminal(stdin: TextIO, stdout: TextIO) -> PosixTerminal:

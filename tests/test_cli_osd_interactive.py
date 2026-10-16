@@ -127,6 +127,21 @@ class WalkTests(InteractiveTestCase):
         self.assertIn("Colour > R (editing)", terminal.text)
         self.assertTrue(out.endswith("left the interactive mode\n"))
 
+    def test_a_held_arrow_key_presses_one_key_because_the_repeats_during_the_press_are_discarded(self) -> None:
+        self.seed_open(key_age_s=1.0)
+        terminal = FakeTerminal(ARROW_RIGHT, CTRL_C)
+        # The key repeat goes on while the first key is sent; the probe runs once per frame accepted.
+        self.io.probe = lambda: terminal.arrive(ARROW_RIGHT * 20) if not self.io.frames else None
+        self.run_interactive(terminal)
+        self.assertEqual(self.sent, [RIGHT])
+        self.assertEqual(self.stored().page_name, "Colour")
+
+    def test_a_refused_key_discards_what_arrived_meanwhile_too(self) -> None:
+        terminal = FakeTerminal(ARROW_RIGHT, CTRL_C)  # there is no state file: the key is refused
+        self.run_interactive(terminal)
+        self.assertEqual(terminal.events.count("discard"), 1)
+        self.assertEqual(self.io.frames, [])
+
     def test_left_is_left(self) -> None:
         self.seed_open()
         self.assertEqual(self.run_interactive(FakeTerminal(ARROW_LEFT, CTRL_C))[0], 0)

@@ -222,6 +222,9 @@ Every other key is ignored: the up and down arrows, other letters (also `Q` and
   by hand only, never from a script or an automated task.
 - Escape and the arrow keys start with the same byte, so a lone Escape is
   recognised when no further byte arrives within 50 ms.
+- Terminal input that arrives while an action is being carried out is discarded,
+  whether the action succeeds, is refused or fails. A held-down arrow key presses
+  at most one key per action, and nothing keeps going after you release it.
 - The terminal settings are restored when the mode ends, also after an error or
   Ctrl-C. Keys typed ahead before the mode starts, or before and during the Reset
   question, are dropped and never send a key. If the terminal goes away, the mode

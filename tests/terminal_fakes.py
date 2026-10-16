@@ -9,6 +9,9 @@ class ScriptedReader:
 
     Items are bytes (split into single bytes), ``None``, ``b""`` or a callable that runs when the code reaches
     that point (to move the fake clock, release a lock, ...). Reading past the script fails the test loudly.
+
+    Bytes that ``FakeTerminal.arrive`` queues model input that reaches the terminal while the code is busy
+    (a held key during an action): they are read before the rest of the script, and ``discard`` drops them.
     """
 
     def __init__(self, *script: bytes | Callable[[], None] | None) -> None:
@@ -18,10 +21,16 @@ class ScriptedReader:
                 self.queue.append(item)
             else:
                 self.queue.extend(item[index : index + 1] for index in range(len(item)))
+        self.arrived: deque[bytes] = deque()
         self.timeouts: list[float | None] = []
+
+    def discard(self) -> None:
+        self.arrived.clear()
 
     def __call__(self, timeout_s: float | None) -> bytes | None:
         self.timeouts.append(timeout_s)
+        if self.arrived:
+            return self.arrived.popleft()
         while self.queue and callable(self.queue[0]):
             hook = self.queue.popleft()
             assert callable(hook)
@@ -55,6 +64,14 @@ class FakeTerminal:
         if not self.lines:
             raise AssertionError("the code asked a question the test did not expect")
         return self.lines.popleft()
+
+    def arrive(self, data: bytes) -> None:
+        """Input that reaches the terminal now, while the code is busy; it is read next unless discarded."""
+        self.read.arrived.extend(data[index : index + 1] for index in range(len(data)))
+
+    def discard_input(self) -> None:
+        self.events.append("discard")
+        self.read.discard()
 
     def set_cbreak(self) -> None:
         self.events.append("cbreak")

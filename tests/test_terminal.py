@@ -122,6 +122,21 @@ class PosixTerminalTests(SafeTestCase):
         self.terminal.set_cbreak()
         self.assertIsNone(self.terminal.read(0.01))
 
+    def test_discard_input_drops_the_bytes_that_arrived_and_keeps_the_next_ones(self) -> None:
+        self.terminal.set_cbreak()
+        os.write(self.master, b"\x1b[C" * 10)  # a held arrow key
+        self.assertTrue(select.select([self.slave], [], [], 1.0)[0])  # it has arrived in the input queue
+        self.terminal.discard_input()
+        self.assertIsNone(self.terminal.read(0.01))
+        os.write(self.master, b"o")
+        self.assertEqual(self.terminal.read(1.0), b"o")
+
+    def test_discard_input_leaves_the_terminal_mode_alone(self) -> None:
+        self.terminal.set_cbreak()
+        flags = self.local_flags()
+        self.terminal.discard_input()
+        self.assertEqual(self.local_flags(), flags)
+
     def test_write_reaches_the_terminal_at_once(self) -> None:
         self.terminal.write("status")
         self.assertIn(b"status", os.read(self.master, 100))

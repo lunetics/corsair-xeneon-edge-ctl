@@ -2,6 +2,7 @@
 
 import unittest
 from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from terminal_fakes import FakeTerminal
@@ -28,6 +29,7 @@ class FakeMenu:
         self.press_results: deque[OsdState | BaseException] = deque()
         self.open_result: OsdState | BaseException | None = None
         self.close_result: OsdState | BaseException | None = None
+        self.during_action: Callable[[], None] = lambda: None  # runs while a press, open or close is carried out
 
     def state(self) -> OsdState:
         return self.current
@@ -44,14 +46,17 @@ class FakeMenu:
 
     def press(self, key: Key, confirm_reset: bool) -> OsdState:
         self.calls.append(("press", key, confirm_reset))
+        self.during_action()
         return self._result(self.press_results.popleft() if self.press_results else None)
 
     def open(self, dcr: bool) -> OsdState:
         self.calls.append(("open", dcr))
+        self.during_action()
         return self._result(self.open_result)
 
     def close(self) -> OsdState:
         self.calls.append(("close",))
+        self.during_action()
         return self._result(self.close_result)
 
 
@@ -375,6 +380,97 @@ class ResetQuestionTests(unittest.TestCase):
         run(terminal, menu)
         self.assertEqual(terminal.events.count("read_line"), 2)
         self.assertNotIn(("press", Key.SELECT, True), menu.calls)
+
+
+HELD_ARROW = RIGHT * 30  # about one second of key repeat
+
+
+class InputDiscardTests(unittest.TestCase):
+    """Input that arrives while an action is carried out is dropped, so a held key presses once."""
+
+    def busy_menu(self, terminal: FakeTerminal, data: bytes = HELD_ARROW) -> FakeMenu:
+        menu = FakeMenu()
+
+        def action() -> None:
+            if len(menu.calls) > len(data) + 5:  # without the discard every press queues more: fail instead of looping
+                raise AssertionError("the queued input keeps acting")
+            terminal.events.append("action")
+            terminal.arrive(data)
+
+        menu.during_action = action
+        return menu
+
+    def test_a_held_arrow_key_presses_exactly_one_key(self) -> None:
+        terminal = FakeTerminal(RIGHT, None, CTRL_C)
+        menu = self.busy_menu(terminal)
+        result = run(terminal, menu)
+        self.assertEqual(menu.calls, [("press", Key.RIGHT, False)])
+        self.assertEqual(result.ending, Ending.INTERRUPTED)
+
+    def test_without_the_discard_the_queued_repeats_would_keep_pressing(self) -> None:
+        terminal = FakeTerminal(RIGHT, CTRL_C)
+        menu = FakeMenu()
+        menu.during_action = lambda: terminal.arrive(HELD_ARROW) if not menu.calls[1:] else None  # the first action only
+        terminal.discard_input = lambda: None  # type: ignore[method-assign]
+        run(terminal, menu)
+        self.assertEqual(len(menu.calls), 31)  # the proof that the test above can fail
+
+    def test_the_input_is_discarded_after_the_action_not_before(self) -> None:
+        terminal = FakeTerminal(RIGHT, CTRL_C)
+        run(terminal, self.busy_menu(terminal))
+        self.assertEqual(terminal.events.count("discard"), 1)
+        self.assertEqual(terminal.events.index("action") + 1, terminal.events.index("discard"))
+
+    def test_every_kind_of_action_discards_also_when_it_is_refused_or_fails(self) -> None:
+        cases = {
+            "press": (RIGHT, None),
+            "open": (b"o", None),
+            "close": (b"q", None),
+            "refused press": (RIGHT, RefusedError("the OSD state is unknown (x); nothing was sent")),
+            "failed press": (RIGHT, TransportError("write failed")),
+            "refused open": (b"o", LockBusyError("another writer holds it")),
+            "failed close": (b"q", TransportError("write failed")),
+        }
+        for name, (keys, error) in cases.items():
+            with self.subTest(action=name):
+                terminal = FakeTerminal(keys, None, CTRL_C)
+                menu = self.busy_menu(terminal)
+                if error is not None:
+                    menu.press_results.append(error)
+                    menu.open_result = error
+                    menu.close_result = error
+                run(terminal, menu)
+                self.assertEqual(len(menu.calls), 1)  # the queued repeats are gone, whatever the outcome
+                self.assertEqual(terminal.events.count("discard"), 1)
+
+    def test_bytes_that_arrived_during_a_failed_press_do_not_act_either(self) -> None:
+        terminal = FakeTerminal(RIGHT, None, CTRL_C)
+        menu = self.busy_menu(terminal, b"o" + ENTER)
+        menu.press_results.append(TransportError("write failed"))
+        run(terminal, menu)
+        self.assertEqual(menu.calls, [("press", Key.RIGHT, False)])
+
+    def test_a_key_pressed_after_the_action_has_finished_is_read(self) -> None:
+        terminal = FakeTerminal(RIGHT, LEFT, CTRL_C)
+        menu = self.busy_menu(terminal)
+        run(terminal, menu)
+        self.assertEqual([call[1] for call in menu.calls], [Key.RIGHT, Key.LEFT])
+
+    def test_the_confirmed_key_after_the_reset_question_discards_once_it_is_done(self) -> None:
+        terminal = FakeTerminal(ENTER, None, CTRL_C, lines=("RESET\n",))
+        menu = self.busy_menu(terminal)
+        menu.press_results.append(osd.ConfirmationRequiredError("select on Reset is refused without --confirm-reset"))
+        run(terminal, menu)
+        self.assertEqual(menu.calls, [("press", Key.SELECT, False), ("press", Key.SELECT, True)])
+        self.assertEqual(terminal.events.count("discard"), 1)
+        self.assertGreater(terminal.events.index("discard"), terminal.events.index("read_line"))
+        last_action = max(index for index, event in enumerate(terminal.events) if event == "action")
+        self.assertGreater(terminal.events.index("discard"), last_action)
+
+    def test_a_key_the_table_does_not_name_carries_out_no_action_and_discards_nothing(self) -> None:
+        terminal = FakeTerminal(b"x", CTRL_C)
+        run(terminal, FakeMenu())
+        self.assertNotIn("discard", terminal.events)
 
 
 class IdleRedrawTests(unittest.TestCase):

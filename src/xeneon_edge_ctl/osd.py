@@ -92,7 +92,8 @@ DCR_PICTURE_FIRST_ENTRY = 2
 # The display shows the menu for "Menu Time" (10 to 60 s) after the last key; the tracked state of an
 # open menu is trusted for less than the shortest of them.
 MAX_KEY_AGE_S = 8.0
-# Pause between two keys of one command.
+# Minimum pause between any two keys: inside one command, and between the last key of one command and
+# the first of the next.
 KEY_SPACING_S = 0.15
 MAX_REPEAT = 50
 
@@ -471,6 +472,20 @@ def _mark_unknown(path: Path, state: OsdState, reason: str) -> None:
         pass
 
 
+def _wait_for_spacing(state: OsdState, clock: Callable[[], datetime], sleep: Callable[[float], None]) -> None:
+    """Wait for the rest of ``KEY_SPACING_S`` since the last key a previous command sent.
+
+    The key time comes from the state file, so this holds across commands. A key time in the future (the
+    clock went backwards) waits the full spacing, never longer; no key time means no wait.
+    """
+    if state.last_key_time is None:
+        return
+    since_last_key_s = (clock() - state.last_key_time).total_seconds()
+    remaining_s = min(KEY_SPACING_S - since_last_key_s, KEY_SPACING_S)
+    if remaining_s > 0:
+        sleep(remaining_s)
+
+
 def send_plan(
     presser: KeyPresser,
     path: Path,
@@ -484,9 +499,11 @@ def send_plan(
     The state is written once before the first key, so a file that cannot be written stops the run
     with nothing sent, and again after every key. If a press fails, the position is no longer
     certain (the key may or may not have arrived), so the last good state is saved as unknown.
+    Before the first key it waits for the rest of ``KEY_SPACING_S`` since the key time in ``state``.
     Returns the state after the last key.
     """
     save_state(path, state)
+    _wait_for_spacing(state, clock, sleep)
     current = state
     for number, step in enumerate(plan.steps):
         if number:
@@ -515,9 +532,11 @@ def send_sequence(
     """Send the fixed keys of ``osd open`` or ``osd close`` and save the state ``finish`` describes.
 
     The position is unknown until the last key is out, so the file says so first (which also proves
-    it can be written). A failure leaves that mark in place.
+    it can be written). A failure leaves that mark in place. Before the first key it waits for the rest
+    of ``KEY_SPACING_S`` since the key time in ``state``.
     """
     save_state(path, dataclasses.replace(state, unknown_reason=REASON_INTERRUPTED))
+    _wait_for_spacing(state, clock, sleep)
     for number, key in enumerate(keys):
         if number:
             sleep(KEY_SPACING_S)

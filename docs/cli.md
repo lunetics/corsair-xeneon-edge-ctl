@@ -148,7 +148,9 @@ it is off unless you say `osd open --dcr on`.
 - `osd close` presses `back` three times, so the menu is closed. It always
   works and clears the Reset mark.
 
-Keys within one command are sent 150 ms apart. `osd open`, `osd key` and
+Keys are sent at least 150 ms apart, also across commands: a command whose
+first key would follow the previous key (the time is in the state file) sooner
+waits for the rest of the 150 ms. `osd open`, `osd key` and
 `osd close` hold the writer lock from the first key to the last. They use HID
 only, never DDC/CI; `--ddc-bus` is accepted and ignored.
 

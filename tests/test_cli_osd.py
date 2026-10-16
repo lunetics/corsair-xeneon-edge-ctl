@@ -18,6 +18,7 @@ PICTURE, COLOUR, DISPLAY, AUDIO, MISC = range(5)
 RESET = 4
 SELECT, RIGHT, LEFT, BACK = 0, 1, 2, 3
 SPACING = osd.KEY_SPACING_S
+SETTLED_S = 1.0  # a key age past the spacing: the next command sends its first key at once
 
 
 def key_frame(selector: int) -> bytes:
@@ -80,9 +81,15 @@ class OsdTestCase(CliTestCase):
     def seed(self, state: OsdState) -> None:
         osd.save_state(self.state_file, state)
 
-    def seed_open(self, level: Level = Level.PAGES, page: int = PICTURE, entry: int | None = None, **fields: object) -> None:
-        """An open menu whose last key was pressed at the fake clock's current time."""
-        self.seed(OsdState(level, page, entry, last_key_time=self.now, **fields))  # type: ignore[arg-type]
+    def seed_open(
+        self, level: Level = Level.PAGES, page: int = PICTURE, entry: int | None = None, key_age_s: float = 0.0, **fields: object
+    ) -> None:
+        """An open menu whose last key was pressed ``key_age_s`` before the fake clock's now (default: at it).
+
+        A key time younger than the key spacing makes the next command wait; pass ``SETTLED_S`` to start
+        without that wait.
+        """
+        self.seed(OsdState(level, page, entry, last_key_time=self.now - timedelta(seconds=key_age_s), **fields))  # type: ignore[arg-type]
 
     def stored(self) -> OsdState:
         return osd.load_state(self.state_file)
@@ -300,7 +307,7 @@ class OpenTests(OsdTestCase):
 
 class CloseTests(OsdTestCase):
     def test_close_json_matches_the_golden_file(self) -> None:
-        self.seed_open(Level.EDITING, DISPLAY, 2, dcr=True, reset_touched=True)
+        self.seed_open(Level.EDITING, DISPLAY, 2, SETTLED_S, dcr=True, reset_touched=True)
         code, out, err = self.invoke("osd", "close", "--json")
         self.assertEqual((code, err), (0, ""))
         self.assert_golden("osd-close.json", out)
@@ -314,7 +321,7 @@ class CloseTests(OsdTestCase):
         self.assertEqual(self.invoke("osd", "close"), (0, "menu closed\n", ""))
 
     def test_close_stores_a_closed_menu_and_clears_the_reset_mark(self) -> None:
-        self.seed_open(Level.ENTRIES, MISC, 0, reset_touched=True)
+        self.seed_open(Level.ENTRIES, MISC, 0, SETTLED_S, reset_touched=True)
         self.invoke("osd", "close")
         stored = self.stored()
         self.assertEqual((stored.level, stored.reset_touched), (Level.CLOSED, False))
@@ -362,7 +369,7 @@ class CloseTests(OsdTestCase):
 
 class KeyTests(OsdTestCase):
     def test_key_json_matches_the_golden_file(self) -> None:
-        self.seed_open()
+        self.seed_open(key_age_s=SETTLED_S)
         code, out, err = self.invoke("osd", "key", "right", "--repeat", "2", "--json")
         self.assertEqual((code, err), (0, ""))
         self.assert_golden("osd-key.json", out)
@@ -385,7 +392,7 @@ class KeyTests(OsdTestCase):
         )
 
     def test_repeat_sends_every_key_150_ms_apart_and_stamps_the_last_one(self) -> None:
-        self.seed_open()
+        self.seed_open(key_age_s=SETTLED_S)
         self.assertEqual(self.invoke("osd", "key", "right", "--repeat", "4")[0], 0)
         self.assertEqual(self.sent, [RIGHT] * 4)
         self.assertEqual(self.sleeps, [SPACING] * 3)
@@ -503,18 +510,60 @@ class KeyTests(OsdTestCase):
         self.assertIn("osd open", err)
 
 
+class SpacingAcrossCommandsTests(OsdTestCase):
+    """Two commands in a row: the second waits for the rest of the 150 ms, measured from the state file."""
+
+    def test_a_second_osd_key_right_after_the_first_waits_the_whole_spacing(self) -> None:
+        self.seed_open(key_age_s=SETTLED_S)
+        self.invoke("osd", "key", "right")
+        self.assertEqual(self.sleeps, [])
+        self.invoke("osd", "key", "right")
+        self.assertEqual(self.sleeps, [SPACING])
+        self.assertEqual(self.stored().last_key_time, FIXED_TIME + timedelta(seconds=SPACING))
+
+    def test_osd_key_waits_only_for_the_rest_of_the_spacing(self) -> None:
+        self.seed_open(key_age_s=0.1)
+        self.invoke("osd", "key", "right")
+        self.assertEqual(len(self.sleeps), 1)
+        self.assertAlmostEqual(self.sleeps[0], SPACING - 0.1)
+
+    def test_osd_open_and_osd_close_after_a_recent_key_wait_before_their_first_key(self) -> None:
+        for command, keys in (("open", 4), ("close", 3)):
+            with self.subTest(command=command):
+                self.sleeps.clear()
+                self.seed_open(key_age_s=0.1)
+                self.invoke("osd", command)
+                self.assertEqual(len(self.sleeps), keys)
+                self.assertAlmostEqual(self.sleeps[0], SPACING - 0.1)
+                self.assertEqual(self.sleeps[1:], [SPACING] * (keys - 1))
+
+    def test_an_old_or_missing_key_time_does_not_make_any_command_wait(self) -> None:
+        self.seed_open(key_age_s=SPACING)
+        self.invoke("osd", "key", "right")
+        self.assertEqual(self.sleeps, [])
+        self.state_file.unlink()
+        self.invoke("osd", "open")
+        self.assertEqual(self.sleeps, [SPACING] * 3)
+
+    def test_a_refused_key_does_not_wait(self) -> None:
+        self.seed_open(Level.ENTRIES, MISC, RESET, 0.0, reset_touched=True)
+        code, _, _ = self.invoke("osd", "key", "select")
+        self.assertEqual((code, self.sleeps, self.io.frames), (3, [], []))
+
+
 class RefusalTests(OsdTestCase):
     """A refusal exits with code 3, sends nothing and leaves the state file as it was."""
 
     def assert_refused(self, *argv: str) -> str:
         before = self.state_file.read_bytes() if self.state_file.exists() else None
         traffic = self.device_traffic()
+        sleeps = list(self.sleeps)
         code, out, err = self.invoke(*argv, "--json")
         self.assertEqual(code, 3, msg=out + err)
         self.assertEqual(err, "")
         self.assertEqual(json.loads(out)["error"]["code"], "refused")
         self.assertEqual(self.device_traffic(), traffic)
-        self.assertEqual(self.sleeps, [])
+        self.assertEqual(self.sleeps, sleeps)  # a refusal sends nothing, so it waits for nothing either
         after = self.state_file.read_bytes() if self.state_file.exists() else None
         self.assertEqual(after, before)
         return out
@@ -577,7 +626,7 @@ class RefusalTests(OsdTestCase):
         self.assert_refused("osd", "key", "select", "--repeat", "50", "--ddc-bus", "17")
 
     def test_moving_onto_reset_is_allowed_and_warns_json(self) -> None:
-        self.seed_open(Level.ENTRIES, MISC, RESET - 1)
+        self.seed_open(Level.ENTRIES, MISC, RESET - 1, SETTLED_S)
         code, out, err = self.invoke("osd", "key", "right", "--json")
         self.assertEqual((code, err), (0, ""))
         document = json.loads(out)

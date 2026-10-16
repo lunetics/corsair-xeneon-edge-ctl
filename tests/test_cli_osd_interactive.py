@@ -97,7 +97,7 @@ class StartAndLeaveTests(InteractiveTestCase):
         self.assertEqual(self.io.frames, [])
 
     def test_q_closes_the_menu_and_exits_with_0(self) -> None:
-        self.seed_open(Level.ENTRIES, PICTURE, 1)
+        self.seed_open(Level.ENTRIES, PICTURE, 1, key_age_s=1.0)
         terminal = FakeTerminal(b"q")
         code, out, err = self.run_interactive(terminal)
         self.assertEqual((code, out, err), (0, "menu closed; left the interactive mode\n", ""))

@@ -7,7 +7,7 @@ name = "corsair-xeneon-edge-ctl"
 version = "0.1.0.dev0"
 description = "Command-line control for the Corsair Xeneon Edge display on Linux (USB HID and DDC/CI)"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Lunetics" }]

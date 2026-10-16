@@ -17,7 +17,7 @@ Pre-release. `status`, `get`, `set`, the `profile` commands and
 ## Requirements
 
 - Linux with the display connected over DisplayPort or USB-C and its USB cable
-- Python 3.12 or newer; no third-party runtime dependencies
+- Python 3.11 or newer; no third-party runtime dependencies
 - [ddcutil](https://www.ddcutil.com/) for DDC/CI
 - The udev rule in [packaging/udev/](packaging/udev/) for HID access as a
   normal user

@@ -31,3 +31,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   power mode back and writes `01` at once if DDC/CI stops answering. The way back
   over USB-C (DisplayPort Alt Mode) is untested and documented as a limitation.
 - The DDC/CI transport writes VCP `0xD6` only with the values `01` and `05`.
+- Runs on Python 3.11 or newer; CI runs the tests on 3.11 to 3.14.

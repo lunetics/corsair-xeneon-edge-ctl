@@ -2,7 +2,7 @@
 
 ## Development setup
 
-- Python 3.12 or newer. The package uses only the standard library.
+- Python 3.11 or newer. The package uses only the standard library.
 - The code lives in `src/xeneon_edge_ctl/` (src layout), so tests import the
   package from an explicit path and never pick up a stray copy by accident.
 

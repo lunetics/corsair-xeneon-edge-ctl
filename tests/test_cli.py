@@ -277,7 +277,7 @@ class ValidationTests(CliTestCase):
         self.assertEqual(self.device_traffic(), 0)
 
     def test_unknown_setting_and_missing_arguments(self) -> None:
-        for argv in (["set", "volume", "5"], ["set", "contrast"], ["get"], ["status", "extra"], ["frobnicate"], []):
+        for argv in (["set", "gamma", "5"], ["set", "contrast"], ["get"], ["status", "extra"], ["frobnicate"], []):
             with self.subTest(argv=argv):
                 code, out, err = self.invoke(*argv)
                 self.assertEqual((code, out), (2, ""))

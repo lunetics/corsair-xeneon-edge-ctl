@@ -16,18 +16,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn, TextIO
 
-from xeneon_edge_ctl import __version__, apply, interactive, lock, osd, power, profile, remembered, state
-from xeneon_edge_ctl.errors import EXIT_OK, UsageError, XeneonError
+from xeneon_edge_ctl import __version__, apply, interactive, lock, osd, osd_edit, power, profile, remembered, state
+from xeneon_edge_ctl.errors import EXIT_OK, RefusedError, UsageError, XeneonError
 from xeneon_edge_ctl.model import (
     MENU_SETTING_NAMES,
     MENU_SETTINGS,
     SETTINGS,
+    MenuKind,
     MenuSetting,
+    MenuValue,
     Setting,
     find_any_setting,
     find_menu_setting,
     find_setting,
     format_value,
+    parse_menu_value,
     parse_value,
 )
 from xeneon_edge_ctl.transport.ddc import DdcTransport, Runner, subprocess_runner
@@ -35,6 +38,8 @@ from xeneon_edge_ctl.transport.hid import DEV_ROOT, SYSFS_ROOT, DevHidIo, HidIo,
 
 PROG = "xeneon-edge-ctl"
 COMMANDS = ("status", "get", "set", "profile", "blank", "unblank", "osd")
+# The menu-only setting whose value also decides where entering Picture lands.
+DCR = "dcr"
 
 
 def _utc_now() -> datetime:
@@ -127,9 +132,21 @@ def build_parser(settings: Sequence[Setting]) -> argparse.ArgumentParser:
     get.add_argument("setting", help=f"one of: {all_names}")
     _add_common_options(get, after_command=True)
 
-    set_ = commands.add_parser("set", help="write one setting, read it back, fail on a mismatch")
-    set_.add_argument("setting", help=f"one of: {names}")
-    set_.add_argument("value", help="number; for preset and language a name or a raw value like 0x0b")
+    set_ = commands.add_parser(
+        "set", help="write one setting, read it back, fail on a mismatch; a menu-only setting is written with OSD keys and not verified"
+    )
+    set_.add_argument("setting", help=f"one of: {all_names}")
+    set_.add_argument(
+        "value",
+        help="number; for preset and language a name or a raw value like 0x0b; for a menu-only list setting one of its options",
+    )
+    set_.add_argument(
+        "--from",
+        dest="from_value",
+        metavar="VALUE",
+        help="menu-only list settings: the value the list is on now (a list is a ring and the run needs its start); "
+        "else the remembered value is used",
+    )
     _add_common_options(set_, after_command=True)
 
     profile_ = commands.add_parser("profile", help="save, list and show profiles")
@@ -247,10 +264,84 @@ def _run_get(args: argparse.Namespace, environment: Environment) -> Outcome:
     return Outcome({"setting": setting.name, "value": value}, format_value(setting, value))
 
 
+def _menu_keys_text(setting: MenuSetting, value: MenuValue, keys: int) -> str:
+    return f"{setting.name} = {value} (written with {keys} keys, not verified)"
+
+
+def _set_menu_setting(args: argparse.Namespace, environment: Environment, setting: MenuSetting) -> Outcome:
+    """``set`` of a menu-only setting: a planned run of OSD keys, then the new value is remembered."""
+    # Usage first: the value, and --from, which only a list can use.
+    target = parse_menu_value(setting, args.value)
+    stated: MenuValue | None = None
+    if args.from_value is not None:
+        if setting.kind is MenuKind.SLIDER:
+            raise UsageError(f"--from applies to lists only; {setting.name} is a slider and is set by clamping")
+        stated = parse_menu_value(setting, args.from_value)
+    values_path = remembered.values_path(environment.env)
+    with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
+        known = remembered.load_values(values_path)
+        current = stated if stated is not None else (known[setting.name].value if setting.name in known else None)
+        if setting.kind is MenuKind.LIST:
+            if current is None:
+                raise RefusedError(
+                    f"{setting.name} is a list and the run needs the value it is on now, but none is remembered; "
+                    f"nothing was sent. Say it with --from <value> (one of: {', '.join(setting.options)})"
+                )
+            if current == target:
+                if stated is not None:
+                    remembered.remember(values_path, setting, target, remembered.KNOWN_BY_STATED)
+                data: dict[str, object] = {"setting": setting.name, "value": target, "verified": False, "keys": 0}
+                return Outcome(data, f"{setting.name} is already {target}; no key was sent")
+        dcr = _assumed_dcr(environment, None)
+        plan = osd_edit.plan_edit(setting, target, current, dcr)
+        keys = len(osd.OPEN_KEYS) + len(plan.steps) + len(osd.CLOSE_KEYS)
+        _send_menu_run(environment, setting, target, plan, dcr)
+    data = {"setting": setting.name, "value": target, "verified": False, "keys": keys}
+    return Outcome(data, _menu_keys_text(setting, target, keys))
+
+
+def _send_menu_run(environment: Environment, setting: MenuSetting, target: MenuValue, plan: osd.Plan, dcr: bool) -> None:
+    """The keys of ``osd open``, the planned edit and the keys of ``osd close``, under the lock the caller holds.
+
+    The remembered value is forgotten before the first key, so a run that does not finish leaves it unknown,
+    and remembered again only after the closing keys. ``set dcr`` leaves the tracked state with the DCR
+    value it wrote.
+    """
+    state_path = osd.state_path(environment.env)
+    values_path = remembered.values_path(environment.env)
+    hid_transport = _open_hid(environment)
+    remembered.forget(values_path, [setting.name])
+    opened = osd.send_sequence(
+        hid_transport,
+        state_path,
+        osd.load_state(state_path),
+        osd.OPEN_KEYS,
+        lambda now: osd.opened_state(now, dcr=dcr),
+        environment.clock,
+        environment.sleep,
+    )
+    edited = osd.send_plan(hid_transport, state_path, opened, plan, environment.clock, environment.sleep)
+    closed_dcr = target == "on" if setting.name == DCR else dcr
+    osd.send_sequence(
+        hid_transport,
+        state_path,
+        edited,
+        osd.CLOSE_KEYS,
+        lambda now: osd.closed_state(now, dcr=closed_dcr),
+        environment.clock,
+        environment.sleep,
+    )
+    remembered.remember(values_path, setting, target, remembered.KNOWN_BY_SET)
+
+
 def _run_set(args: argparse.Namespace, environment: Environment) -> Outcome:
     # Everything that can be checked without I/O is checked first: unknown setting,
     # malformed value, value outside its range.
-    setting = find_setting(environment.settings, args.setting)
+    setting = find_any_setting(environment.settings, args.setting)
+    if isinstance(setting, MenuSetting):
+        return _set_menu_setting(args, environment, setting)
+    if args.from_value is not None:
+        raise UsageError(f"--from applies to the list settings that exist only in the on-screen menu, not to {setting.name}")
     value = parse_value(setting, args.value)
     with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
         read_back = state.set_and_verify(_open_device(environment, args.ddc_bus), setting, value)
@@ -338,9 +429,6 @@ def _after_text(state_: osd.OsdState) -> str:
     if state_.unknown_reason is not None:
         text += f" (state unknown: {state_.unknown_reason}; {osd.OPEN_HINT})"
     return text
-
-
-DCR = "dcr"
 
 
 def _remember_stated_dcr(environment: Environment, dcr: bool) -> None:

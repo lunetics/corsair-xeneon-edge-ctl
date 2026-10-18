@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn, TextIO
 
-from xeneon_edge_ctl import __version__, apply, interactive, lock, osd, osd_edit, power, profile, remembered, state
+from xeneon_edge_ctl import __version__, apply, collateral, interactive, lock, osd, osd_edit, power, profile, remembered, state
 from xeneon_edge_ctl.errors import EXIT_OK, RefusedError, UsageError, XeneonError
 from xeneon_edge_ctl.model import (
     MENU_SETTING_NAMES,
@@ -295,21 +295,26 @@ def _set_menu_setting(args: argparse.Namespace, environment: Environment, settin
         dcr = _assumed_dcr(environment, None)
         plan = osd_edit.plan_edit(setting, target, current, dcr)
         keys = len(osd.OPEN_KEYS) + len(plan.steps) + len(osd.CLOSE_KEYS)
-        _send_menu_run(environment, setting, target, plan, dcr)
+        _write_menu_setting(environment, args.ddc_bus, setting, target, plan, dcr)
     data = {"setting": setting.name, "value": target, "verified": False, "keys": keys}
     return Outcome(data, _menu_keys_text(setting, target, keys))
 
 
-def _send_menu_run(environment: Environment, setting: MenuSetting, target: MenuValue, plan: osd.Plan, dcr: bool) -> None:
-    """The keys of ``osd open``, the planned edit and the keys of ``osd close``, under the lock the caller holds.
+def _write_menu_setting(
+    environment: Environment, ddc_bus: int | None, setting: MenuSetting, target: MenuValue, plan: osd.Plan, dcr: bool
+) -> None:
+    """The steps of docs/design.md, "Writing a menu-only setting", under the lock the caller holds.
 
-    The remembered value is forgotten before the first key, so a run that does not finish leaves it unknown,
-    and remembered again only after the closing keys. ``set dcr`` leaves the tracked state with the DCR
-    value it wrote.
+    The readable settings are read first and the display must answer, so a run that cannot be checked
+    afterwards never starts. The remembered value is forgotten before the first key, so a run that does not
+    finish leaves it unknown, and remembered again only when the check after the closing keys passes.
+    ``set dcr`` leaves the tracked state with the DCR value it wrote.
     """
     state_path = osd.state_path(environment.env)
     values_path = remembered.values_path(environment.env)
     hid_transport = _open_hid(environment)
+    device = _open_device(environment, ddc_bus)
+    before = state.read_settings(device, environment.settings)
     remembered.forget(values_path, [setting.name])
     opened = osd.send_sequence(
         hid_transport,
@@ -331,6 +336,11 @@ def _send_menu_run(environment: Environment, setting: MenuSetting, target: MenuV
         environment.clock,
         environment.sleep,
     )
+    after = state.read_settings(device, environment.settings)
+    changed = collateral.differing(environment.settings, before, after)
+    if changed:
+        restored = collateral.restore(device, environment.settings, before)
+        raise collateral.failure(setting.name, changed, before, after, restored)
     remembered.remember(values_path, setting, target, remembered.KNOWN_BY_SET)
 
 

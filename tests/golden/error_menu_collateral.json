@@ -1,0 +1,1 @@
+{"ok": false, "command": "set", "data": null, "error": {"code": "mismatch", "message": "effect: the key run changed readable settings, so it did not do what was planned: contrast 50 -> 51 (restored). The remembered value of effect was forgotten"}}

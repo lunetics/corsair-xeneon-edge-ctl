@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from menu_fakes import MENU_ONLY_ENTRIES, MenuSimulator
-from support import FakeDisplay, FakeRunner
+from support import FakeDisplay, FakeHidIo, FakeRunner
 from test_cli import FIXED_TIME
 from test_cli_osd import BACK, SELECT, SPACING, OsdTestCase, ProbingIo, key_frame
 
@@ -19,17 +19,34 @@ from xeneon_edge_ctl.osd import Key, Level
 READABLE = ("brightness", "contrast", "sharpness", "red", "green", "blue")
 
 
+def is_key_frame(frame: bytes) -> bool:
+    return frame[1] == 0x0F and frame[6] == 0x01
+
+
 class SimulatedProbingIo(ProbingIo):
-    """The probing fake HID I/O whose key frames also drive the simulated menu (after the usual fake answer)."""
+    """Fake HID I/O whose key frames (group 01) drive the simulated menu after the usual fake answer.
+
+    ``key_probe`` runs before each key frame is accepted and ``fail_on_key`` makes the n-th key frame (1-based)
+    fail; reads of the readable settings pass through untouched, so a test sees the keys only.
+    """
 
     def __init__(self, display: FakeDisplay, menu: MenuSimulator) -> None:
         super().__init__(display)
         self.menu = menu
+        self.key_probe = lambda: None
+        self.fail_on_key: int | None = None
+        self.keys_seen = 0
 
     def exchange(self, node: Path, frame: bytes, expect_cmd: int, timeout_ms: int) -> bytes | None:
-        reply = super().exchange(node, frame, expect_cmd, timeout_ms)
-        if frame[1] == 0x0F and frame[6] == 0x01:
-            self.menu.press(frame[7])
+        if not is_key_frame(frame):
+            return FakeHidIo.exchange(self, node, frame, expect_cmd, timeout_ms)
+        self.key_probe()
+        self.keys_seen += 1
+        if self.fail_on_key == self.keys_seen:
+            self.calls.append((node, frame, expect_cmd, timeout_ms))
+            raise TransportError("write to the fake node failed")
+        reply = FakeHidIo.exchange(self, node, frame, expect_cmd, timeout_ms)
+        self.menu.press(frame[7])
         return reply
 
 
@@ -52,11 +69,22 @@ class MenuSetTestCase(OsdTestCase):
         self.start_world()
 
     def start_world(self, lose: tuple[int, ...] = ()) -> None:
-        """A fresh simulated display, menu and fake I/O (the files in the temp directory stay)."""
+        """A fresh simulated display, menu and fake I/O, and no remembered values (a remembered DCR value
+        would otherwise carry over into the next run and be wrong for the new display)."""
+        self.values_file.unlink(missing_ok=True)
         self.display = FakeDisplay()
         self.menu = MenuSimulator(self.display, lose)
         self.io = SimulatedProbingIo(self.display, self.menu)
         self.runner = FakeRunner(self.display)
+
+    @property
+    def key_frames(self) -> list[bytes]:
+        """The key frames sent so far (reads of the readable settings are not keys)."""
+        return [frame for frame in self.io.frames if is_key_frame(frame)]
+
+    @property
+    def sent(self) -> list[int]:
+        return [frame[7] for frame in self.key_frames]
 
     def set_value(self, name: str, value: str, *flags: str) -> tuple[int, str, str]:
         return self.invoke("set", name, value, *flags, "--json")
@@ -71,6 +99,7 @@ class MenuSetTestCase(OsdTestCase):
 
     def assert_nothing_happened(self, state_before: bytes | None, values_before: dict[str, tuple[MenuValue, str]]) -> None:
         self.assertEqual(self.io.calls, [])
+        self.assertEqual(self.runner.calls, [])
         self.assertEqual(self.sleeps, [])
         self.assertEqual(self.state_file.read_bytes() if self.state_file.exists() else None, state_before)
         self.assertEqual(self.remembered_values(), values_before)
@@ -251,7 +280,7 @@ class SafetyTests(MenuSetTestCase):
         code, out, err = self.set_value(name, value, *flags)
         self.assertEqual((code, err), (0, ""), out)
         data = self.data_of(out)
-        self.assertEqual(data["keys"], len(self.io.frames))
+        self.assertEqual(data["keys"], len(self.key_frames))
         self.assertEqual(self.menu.menu_only()[name], self.expected_value(name, value))
         for other, before in menu_only_before.items():
             if other != name:
@@ -289,7 +318,7 @@ class SafetyTests(MenuSetTestCase):
         self.seed_open(key_age_s=0.1)
         self.invoke("set", "mute", "on", "--from", "off")
         self.assertAlmostEqual(self.sleeps[0], SPACING - 0.1)
-        self.assertEqual(self.sleeps[1:], [SPACING] * (len(self.io.frames) - 1))
+        self.assertEqual(self.sleeps[1:], [SPACING] * (len(self.key_frames) - 1))
 
     def test_with_one_key_lost_no_run_ever_presses_reset_or_a_key_without_measured_effect(self) -> None:
         cases = (
@@ -318,8 +347,13 @@ class SafetyTests(MenuSetTestCase):
             for lost in lost_keys:
                 with self.subTest(setting=name, lost=lost):
                     self.start_world(lose=(lost,))
+                    readable_before = self.readable()
                     code, out, _ = self.set_value(name, value, *flags)
-                    self.assertEqual(code, 0, out)
+                    # A miss that edits a readable entry is caught by the collateral check (exit code 6) and
+                    # written back; any other miss goes unseen (exit code 0). Neither presses Reset.
+                    self.assertIn(code, (0, 6), out)
+                    if code == 6:
+                        self.assertEqual(self.readable(), readable_before)
                     self.assertFalse(self.menu.reset_selected)
                     self.assertEqual(self.menu.unmeasured_keys, 0)
 
@@ -338,8 +372,9 @@ class SafetyTests(MenuSetTestCase):
 
     def test_no_run_contains_the_reset_frame_or_any_other_frame_than_the_four_keys(self) -> None:
         self.invoke("set", "saturation", "70")
-        self.assertTrue(all(frame in {key_frame(selector) for selector in range(4)} for frame in self.io.frames))
-        self.assertEqual(self.runner.calls, [])
+        self.assertTrue(all(frame in {key_frame(selector) for selector in range(4)} for frame in self.key_frames))
+        self.assertTrue(all(is_key_frame(frame) or frame[1] == 0x0E for frame in self.io.frames))  # keys and reads only
+        self.assertEqual(self.runner.setvcp_calls, [])
 
     def test_a_refused_key_path_exits_with_3_and_sends_nothing_and_forgets_nothing(self) -> None:
         # The documented example: Audio > Mute reached with a left for the value would reach Reset when the
@@ -371,7 +406,7 @@ class RememberedValueTests(MenuSetTestCase):
         self.remember("effect", "standard")
         self.remember("volume", 30)
         seen: list[dict[str, tuple[MenuValue, str]]] = []
-        self.io.probe = lambda: seen.append(dict(self.remembered_values()))
+        self.io.key_probe = lambda: seen.append(dict(self.remembered_values()))
         self.invoke("set", "effect", "game")
         self.assertEqual(len(seen), 14)
         self.assertTrue(all(snapshot == {"volume": (30, "set")} for snapshot in seen))
@@ -380,11 +415,11 @@ class RememberedValueTests(MenuSetTestCase):
     def test_a_run_that_does_not_finish_leaves_the_value_unknown(self) -> None:
         self.remember("effect", "standard")
         self.remember("volume", 30)
-        self.io.fail_on_call = 9
+        self.io.fail_on_key = 9
         code, _, err = self.invoke("set", "effect", "game")
         self.assertEqual(code, 5)
         self.assertIn("fake node", err)
-        self.assertEqual(len(self.io.calls), 9)
+        self.assertEqual(len(self.key_frames), 9)
         self.assertEqual(self.remembered_values(), {"volume": (30, "set")})
         self.assertEqual(self.stored().unknown_reason, osd.REASON_SEND_FAILED)
         self.assertEqual(self.invoke("get", "effect", "--json")[0], 0)
@@ -392,14 +427,14 @@ class RememberedValueTests(MenuSetTestCase):
 
     def test_a_failure_among_the_opening_keys_leaves_the_value_unknown_too(self) -> None:
         self.remember("effect", "standard")
-        self.io.fail_on_call = 2
+        self.io.fail_on_key = 2
         self.assertEqual(self.invoke("set", "effect", "game")[0], 5)
         self.assertEqual(self.remembered_values(), {})
         self.assertEqual(self.stored().unknown_reason, osd.REASON_INTERRUPTED)
 
     def test_a_failure_among_the_closing_keys_leaves_the_value_unknown_too(self) -> None:
         self.remember("effect", "standard")
-        self.io.fail_on_call = 13
+        self.io.fail_on_key = 13
         self.assertEqual(self.invoke("set", "effect", "game")[0], 5)
         self.assertEqual(self.remembered_values(), {})
 
@@ -414,7 +449,7 @@ class RememberedValueTests(MenuSetTestCase):
         code, _, err = self.invoke("set", "volume", "30")
         self.assertEqual(code, 5)
         self.assertIn("corsair-xeneon-edge-ctl", err)
-        self.assertEqual(self.io.calls, [])
+        self.assertEqual(self.key_frames, [])
         self.assertEqual(self.state_file.read_bytes() if self.state_file.exists() else None, state_before)
 
     def test_without_a_state_directory_nothing_is_sent(self) -> None:
@@ -456,10 +491,10 @@ class RememberedValueTests(MenuSetTestCase):
 
     def test_the_lock_is_held_for_the_whole_run(self) -> None:
         held: list[bool] = []
-        self.io.probe = lambda: held.append(self.lock_is_held_by_the_command())
+        self.io.key_probe = lambda: held.append(self.lock_is_held_by_the_command())
         self.invoke("set", "mute", "on", "--from", "off")
         self.assertTrue(held and all(held))
-        self.assertEqual(len(held), len(self.io.calls))
+        self.assertEqual(len(held), len(self.key_frames))
         self.assertFalse(self.lock_is_held_by_the_command())
 
 
@@ -468,12 +503,12 @@ class StateFileTests(MenuSetTestCase):
         self.invoke("set", "mute", "on", "--from", "off")
         stored = self.stored()
         self.assertEqual((stored.level, stored.unknown_reason, stored.reset_touched), (Level.CLOSED, None, False))
-        self.assertEqual(stored.last_key_time, FIXED_TIME + timedelta(seconds=(len(self.io.frames) - 1) * SPACING))
+        self.assertEqual(stored.last_key_time, FIXED_TIME + timedelta(seconds=(len(self.key_frames) - 1) * SPACING))
         self.assertTrue(osd.assess(stored, self.now).known)
 
     def test_the_state_file_follows_every_key(self) -> None:
         seen: list[tuple[str, bool]] = []  # (level, known) of the file when each key is about to go out
-        self.io.probe = lambda: seen.append((self.stored().level.value, self.stored().unknown_reason is None))
+        self.io.key_probe = lambda: seen.append((self.stored().level.value, self.stored().unknown_reason is None))
         self.invoke("set", "mute", "on", "--from", "off")
         self.assertEqual(len(seen), 15)  # 4 keys of osd open, 8 planned keys, 3 keys of osd close
         self.assertEqual([known for _, known in seen[:4]], [False] * 4)  # osd open: unknown until its last key is out

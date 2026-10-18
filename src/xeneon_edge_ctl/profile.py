@@ -72,9 +72,14 @@ def profile_path(env: Mapping[str, str], name: str) -> Path:
     return profiles_dir(env) / f"{validate_name(name)}{PROFILE_SUFFIX}"
 
 
+def state_file_path(env: Mapping[str, str], file_name: str) -> Path:
+    """A file of the tool in ``$XDG_STATE_HOME/corsair-xeneon-edge-ctl`` (``~/.local/state`` when unset)."""
+    return _xdg_dir(env, "XDG_STATE_HOME", ".local/state") / APP_DIR_NAME / file_name
+
+
 def journal_path(env: Mapping[str, str]) -> Path:
     """The journal of the last apply, in ``$XDG_STATE_HOME`` (``~/.local/state`` when unset)."""
-    return _xdg_dir(env, "XDG_STATE_HOME", ".local/state") / APP_DIR_NAME / JOURNAL_FILE_NAME
+    return state_file_path(env, JOURNAL_FILE_NAME)
 
 
 def document_text(profile: Profile) -> str:

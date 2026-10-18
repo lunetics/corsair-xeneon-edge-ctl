@@ -20,6 +20,7 @@ from xeneon_edge_ctl import __version__, apply, interactive, lock, osd, power, p
 from xeneon_edge_ctl.errors import EXIT_OK, UsageError, XeneonError
 from xeneon_edge_ctl.model import (
     MENU_SETTING_NAMES,
+    MENU_SETTINGS,
     SETTINGS,
     MenuSetting,
     Setting,
@@ -399,6 +400,42 @@ def _close_menu(environment: Environment) -> osd.OsdState:
         )
 
 
+def _values_changed_by(start: osd.OsdState, plan: osd.Plan) -> tuple[set[str], bool]:
+    """What the planned keys do to the remembered values: the menu-only settings whose edit is kept (a
+    ``select`` while editing their entry), and whether a ``select`` on Reset is in the run."""
+    kept: set[str] = set()
+    reset = False
+    current = start
+    for step in plan.steps:
+        if step.key is osd.Key.SELECT:
+            if current.level is osd.Level.EDITING:
+                kept.update(
+                    setting.name
+                    for setting in MENU_SETTINGS
+                    if (setting.page, setting.entry) == (current.page_name, current.entry_name)
+                )
+            elif current.level is osd.Level.ENTRIES and current.on_reset:
+                reset = True
+        current = step.after
+    return kept, reset
+
+
+def _forget_for(environment: Environment, start: osd.OsdState, plan: osd.Plan) -> None:
+    """Forget the remembered values the planned keys make untrustworthy, before the first key is sent.
+
+    The display does not report them, so a value edited by hand, or wiped by a Reset, is unknown from now
+    on. Nothing is written when nothing the run touches is remembered.
+    """
+    kept, reset = _values_changed_by(start, plan)
+    if not (kept or reset):
+        return
+    known = remembered.load_values_for(environment.env)
+    if reset and known:
+        remembered.forget_all(remembered.values_path(environment.env))
+    elif kept & known.keys():
+        remembered.forget(remembered.values_path(environment.env), kept)
+
+
 def _press_keys(environment: Environment, key: osd.Key, repeat: int, confirm_reset: bool) -> tuple[osd.Plan, osd.OsdState]:
     """``osd key``: the state file is read and the whole run planned while no other writer can change it,
     and before any key is sent. Shared with ``osd interactive``."""
@@ -406,7 +443,9 @@ def _press_keys(environment: Environment, key: osd.Key, repeat: int, confirm_res
     with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
         current = osd.load_state(path)
         plan = osd.plan_keys(current, environment.clock(), key, repeat, confirm_reset)
-        final = osd.send_plan(_open_hid(environment), path, current, plan, environment.clock, environment.sleep)
+        hid_transport = _open_hid(environment)
+        _forget_for(environment, current, plan)
+        final = osd.send_plan(hid_transport, path, current, plan, environment.clock, environment.sleep)
     return plan, final
 
 

@@ -164,7 +164,7 @@ class Menu(Protocol):
 
     def press(self, key: osd.Key, confirm_reset: bool) -> osd.OsdState: ...
 
-    def open(self, dcr: bool) -> osd.OsdState: ...
+    def open(self, dcr: bool | None) -> osd.OsdState: ...
 
     def close(self) -> osd.OsdState: ...
 
@@ -212,7 +212,7 @@ def _failure_text(error: XeneonError) -> str:
 
 
 class _Session:
-    def __init__(self, terminal: Terminal, menu: Menu, dcr: bool) -> None:
+    def __init__(self, terminal: Terminal, menu: Menu, dcr: bool | None) -> None:
         self.terminal = terminal
         self.menu = menu
         self.dcr = dcr
@@ -300,7 +300,7 @@ class _Session:
         self.rows = max(1, -(-len(text) // max(1, self.terminal.columns())))
 
 
-def run_session(terminal: Terminal, menu: Menu, *, dcr: bool) -> SessionResult:
+def run_session(terminal: Terminal, menu: Menu, *, dcr: bool | None) -> SessionResult:
     """Run the interactive mode until ``q``, Ctrl-C or the end of the input.
 
     Nothing is sent on start. The terminal settings are restored on every way out, including an

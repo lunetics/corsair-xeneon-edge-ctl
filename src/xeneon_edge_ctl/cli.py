@@ -24,6 +24,7 @@ from xeneon_edge_ctl.model import (
     MenuSetting,
     Setting,
     find_any_setting,
+    find_menu_setting,
     find_setting,
     format_value,
     parse_value,
@@ -157,8 +158,10 @@ def build_parser(settings: Sequence[Setting]) -> argparse.ArgumentParser:
     open_.add_argument(
         "--dcr",
         choices=("on", "off"),
-        default="off",
-        help="DCR cannot be read from the display; say 'on' if it is on, so Picture starts on Sharpness (default: off)",
+        help=(
+            "DCR cannot be read from the display; say 'on' if it is on, so Picture starts on Sharpness. "
+            "Remembered as stated. Without it the remembered dcr value is used, else off"
+        ),
     )
     _add_common_options(open_, after_command=True)
     key = osd_actions.add_parser("key", help="press one OSD key once or --repeat times")
@@ -180,8 +183,10 @@ def build_parser(settings: Sequence[Setting]) -> argparse.ArgumentParser:
     interactive_.add_argument(
         "--dcr",
         choices=("on", "off"),
-        default="off",
-        help="the DCR assumption for 'o' (open); DCR cannot be read from the display (default: off)",
+        help=(
+            "the DCR assumption for 'o' (open); DCR cannot be read from the display. Remembered as stated. "
+            "Without it the remembered dcr value is used, else off"
+        ),
     )
     _add_common_options(interactive_, after_command=True)
     return parser
@@ -334,17 +339,44 @@ def _after_text(state_: osd.OsdState) -> str:
     return text
 
 
-def _open_menu(environment: Environment, dcr: bool) -> osd.OsdState:
-    """``osd open``: lock, then ``back`` three times and ``select``. Shared with ``osd interactive``."""
+DCR = "dcr"
+
+
+def _remember_stated_dcr(environment: Environment, dcr: bool) -> None:
+    """Remember a ``--dcr`` value as stated. The caller holds the writer lock."""
+    setting = find_menu_setting(DCR)
+    assert setting is not None
+    remembered.remember(
+        remembered.values_path(environment.env), setting, "on" if dcr else "off", remembered.KNOWN_BY_STATED
+    )
+
+
+def _assumed_dcr(environment: Environment, stated: bool | None) -> bool:
+    """The DCR assumption of a run that opens the menu: ``--dcr`` (remembered as stated), else the remembered
+    ``dcr`` value, else off. The caller holds the writer lock."""
+    if stated is not None:
+        _remember_stated_dcr(environment, stated)
+        return stated
+    entry = remembered.load_values_for(environment.env).get(DCR)
+    return entry is not None and entry.value == "on"
+
+
+def _open_menu(environment: Environment, dcr: bool | None) -> osd.OsdState:
+    """``osd open``: lock, then ``back`` three times and ``select``. Shared with ``osd interactive``.
+
+    ``dcr`` is what ``--dcr`` said (``None`` without it). The display is looked up before the values file is
+    touched, and the values file is written before the first key.
+    """
     path = osd.state_path(environment.env)
     with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
         hid_transport = _open_hid(environment)
+        assumed = _assumed_dcr(environment, dcr)
         return osd.send_sequence(
             hid_transport,
             path,
             osd.load_state(path),
             osd.OPEN_KEYS,
-            lambda now: osd.opened_state(now, dcr=dcr),
+            lambda now: osd.opened_state(now, dcr=assumed),
             environment.clock,
             environment.sleep,
         )
@@ -378,11 +410,15 @@ def _press_keys(environment: Environment, key: osd.Key, repeat: int, confirm_res
     return plan, final
 
 
+def _stated_dcr(args: argparse.Namespace) -> bool | None:
+    """What ``--dcr`` said: ``True`` for on, ``False`` for off, ``None`` when it was not given."""
+    return None if args.dcr is None else args.dcr == "on"
+
+
 def _run_osd_open(args: argparse.Namespace, environment: Environment) -> Outcome:
-    dcr = args.dcr == "on"
-    final = _open_menu(environment, dcr)
+    final = _open_menu(environment, _stated_dcr(args))
     data: dict[str, object] = {"keys": [key.value for key in osd.OPEN_KEYS], "state": osd.state_summary(final)}
-    return Outcome(data, f"menu opened on Picture (DCR assumed {'on' if dcr else 'off'})")
+    return Outcome(data, f"menu opened on Picture (DCR assumed {'on' if final.dcr else 'off'})")
 
 
 def _run_osd_close(args: argparse.Namespace, environment: Environment) -> Outcome:
@@ -443,7 +479,7 @@ class _CliMenu:
     def press(self, key: osd.Key, confirm_reset: bool) -> osd.OsdState:
         return _press_keys(self.environment, key, 1, confirm_reset)[1]
 
-    def open(self, dcr: bool) -> osd.OsdState:
+    def open(self, dcr: bool | None) -> osd.OsdState:
         return _open_menu(self.environment, dcr)
 
     def close(self) -> osd.OsdState:
@@ -465,9 +501,13 @@ def _run_osd_interactive(args: argparse.Namespace, environment: Environment) -> 
         raise UsageError("osd interactive reads keys from a terminal and has no --json output")
     if not (_is_terminal(environment.stdin) and _is_terminal(environment.stdout)):
         raise UsageError("osd interactive needs a terminal: both stdin and stdout must be a terminal")
+    dcr = _stated_dcr(args)
+    if dcr is not None:  # a statement is remembered at the start, not only when 'o' uses it; no key is sent
+        with lock.SingleWriterLock(lock.lock_path(environment.env), environment.lock_timeout_s):
+            _remember_stated_dcr(environment, dcr)
     menu = _CliMenu(environment)
     terminal = environment.terminal_factory(environment.stdin, environment.stdout)
-    result = interactive.run_session(terminal, menu, dcr=args.dcr == "on")
+    result = interactive.run_session(terminal, menu, dcr=dcr)
     if result.ending is interactive.Ending.QUIT:
         text = "menu closed; left the interactive mode"
     else:

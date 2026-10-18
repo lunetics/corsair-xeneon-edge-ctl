@@ -49,4 +49,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that needs `--confirm-reset` asks first, and only the exact answer `RESET`
   sends it. It exits with code 2 when stdin or stdout is not a terminal, and with
   `--json`; Ctrl-C leaves without sending a key (exit code 0).
+- `set` and `get` for the ten settings that exist only in the on-screen menu
+  (`effect`, `saturation`, `low-blue-light`, `aspect`, `dcr`, `rotate`,
+  `overdrive`, `volume`, `mute`, `audio-source`). `set` writes them with a
+  planned run of OSD keys (`--from` names the value a list starts from), never
+  enters the Misc page, and refuses a run in which one lost key would press
+  `select` on Reset (exit code 3). The value is written, not verified: `get`
+  prints the last value the tool knows from
+  `$XDG_STATE_HOME/corsair-xeneon-edge-ctl/osd-values.json`, which is forgotten
+  when a hand-made edit or a Reset invalidates it. A `set` run reads the readable
+  settings before and after and, on a difference, writes them back and exits
+  with code 6. `osd open` and `osd interactive` take the DCR assumption from the
+  remembered `dcr` value unless `--dcr` is given.
 - Runs on Python 3.11 or newer; CI runs the tests on 3.11 to 3.14.

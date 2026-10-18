@@ -1,6 +1,6 @@
 # Design
 
-Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`, `osd open`/`key`/`where`/`close`/`interactive`. Specified, not implemented: `set` and `get` for the [menu-only settings](#menu-only-settings). Menu-only settings in profiles follow in a later version.
+Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`, `osd open`/`key`/`where`/`close`/`interactive`, and `set` and `get` for the [menu-only settings](#menu-only-settings). Menu-only settings in profiles follow in a later version.
 
 ## Contents
 
@@ -82,6 +82,9 @@ cli ──► apply ──► profile ──► state ──► model ──► 
    ├──► power ─────────────────┘                └► transport.ddc
    ├──► lock
    ├──► interactive ──► osd
+   ├──► osd_edit ──► osd
+   ├──► collateral ──► apply
+   ├──► remembered ──► profile
    └──► osd ──► transport.hid
 ```
 
@@ -99,6 +102,12 @@ cli ──► apply ──► profile ──► state ──► model ──► 
 - `lock`: the single-writer lock (see [Single writer](#single-writer)).
 - `osd`: the menu model, the tracked cursor state and the key planning (see
   [OSD key control](#osd-key-control)).
+- `osd_edit`: the key paths of the menu-only settings and the single-lost-key
+  check (see [Key paths](#key-paths)); pure, no I/O.
+- `remembered`: the file of remembered menu-only values (see
+  [Remembered values](#remembered-values)).
+- `collateral`: the comparison of the readable settings around a menu-only run
+  and the write-back (see [Collateral check](#collateral-check)).
 - `interactive`: terminal key decoding, the session loop and the termios
   adapter of `osd interactive` (see [Interactive mode](#interactive-mode)); it
   reaches the display only through the menu object `cli` passes in.

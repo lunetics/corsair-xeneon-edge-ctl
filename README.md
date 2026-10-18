@@ -12,7 +12,9 @@ are trademarks of their respective owners.
 
 Pre-release. `status`, `get`, `set`, the `profile` commands,
 `blank`/`unblank` and the `osd` commands for the on-screen menu keys work,
-including `osd interactive` for arrow-key control from the terminal. The
+including `osd interactive` for arrow-key control from the terminal. `set` and
+`get` also cover the ten settings that exist only in the on-screen menu; their
+values are written with OSD keys and not verified. The
 full design is in [docs/design.md](docs/design.md).
 
 ## Requirements

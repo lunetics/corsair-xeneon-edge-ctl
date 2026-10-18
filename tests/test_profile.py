@@ -134,6 +134,15 @@ class ParseTests(SafeTestCase):
             {"version": 1, "settings": {"volume": {"value": 5, "class": "verified"}}}, "volume"
         )
 
+    def test_menu_only_settings_are_rejected_and_named_as_such(self) -> None:
+        for name in model.MENU_SETTING_NAMES:
+            with self.subTest(name=name):
+                self.assert_document_rejected({"version": 1, "settings": {name: {"value": 5, "class": "verified"}}}, "menu-only")
+
+    def test_a_menu_only_setting_next_to_readable_ones_rejects_the_whole_file(self) -> None:
+        document = {"version": 1, "settings": {"contrast": {"value": 5, "class": "verified"}, "effect": {"value": "game", "class": "written"}}}
+        self.assert_document_rejected(document, "effect")
+
     def test_out_of_range_values_are_rejected(self) -> None:
         for name, value in (("backlight", 101), ("backlight", -1), ("sharpness", 5), ("red", 256), ("preset", 256)):
             with self.subTest(name=name, value=value):

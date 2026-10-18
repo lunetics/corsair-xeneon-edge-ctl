@@ -379,6 +379,22 @@ class ProfileApplyTests(ProfileTestCase):
         self.assertEqual(self.device_traffic(), 0)
         self.assertFalse(self.journal_file.exists())
 
+    def test_a_menu_only_setting_in_a_profile_file_is_a_usage_error_before_any_io(self) -> None:
+        self.hold_lock()  # a lock-first order would give exit code 7
+        for name, value in (("effect", "game"), ("saturation", 70), ("mute", "on")):
+            with self.subTest(name=name):
+                self.store("menu", {"version": 1, "settings": {"contrast": {"value": 60, "class": "verified"}, name: {"value": value, "class": "verified"}}})
+                code, out, err = self.apply("menu", "--json")
+                self.assertEqual((code, err), (2, ""))
+                error = json.loads(out)["error"]
+                self.assertEqual(error["code"], "usage")
+                self.assertIn("menu-only", error["message"])
+                code, _, err = self.invoke("profile", "show", "menu")
+                self.assertEqual(code, 2)
+                self.assertIn("menu-only", err)
+        self.assertEqual(self.device_traffic(), 0)
+        self.assertFalse(self.journal_file.exists())
+
     def test_a_valid_value_next_to_an_invalid_one_writes_nothing(self) -> None:
         self.store("work", {"version": 1, "settings": {"backlight": {"value": 60, "class": "verified"}, "red": {"value": 999, "class": "verified"}}})
         self.assertEqual(self.apply()[0], 2)

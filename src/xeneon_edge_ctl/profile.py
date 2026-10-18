@@ -16,7 +16,7 @@ from pathlib import Path
 
 from xeneon_edge_ctl import state
 from xeneon_edge_ctl.errors import TransportError, UsageError
-from xeneon_edge_ctl.model import Setting, check_range, find_setting
+from xeneon_edge_ctl.model import Setting, check_range, find_menu_setting, find_setting
 
 APP_DIR_NAME = "corsair-xeneon-edge-ctl"
 PROFILE_VERSION = 1
@@ -114,6 +114,8 @@ def parse_profile(settings: Sequence[Setting], name: str, text: str) -> Profile:
         raise fail("the profile has no settings")
     values: dict[str, int] = {}
     for setting_name, entry in stored.items():
+        if find_menu_setting(setting_name) is not None:
+            raise fail(f"{setting_name} is a menu-only setting; a profile holds readable settings only")
         try:
             setting = find_setting(settings, setting_name)
         except UsageError as exc:

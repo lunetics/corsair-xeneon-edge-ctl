@@ -10,11 +10,15 @@ Two traps are encoded here:
   "Brightness" (VCP 0x10) is HID ``backlight``.
 * The RGB gains have no DDC/CI write channel: DDC/CI writes them in percent but
   reads them in 0-255, so only HID can set them exactly.
+
+The menu-only settings (docs/design.md, "Menu-only settings") have no channel at
+all: they live in the on-screen menu, so they sit in their own table.
 """
 
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from xeneon_edge_ctl.errors import UsageError
 
@@ -126,3 +130,94 @@ def format_value(setting: Setting, value: int) -> str:
                 return name
         return f"0x{value:02x}"
     return str(value)
+
+
+class MenuKind(StrEnum):
+    """How a menu entry is edited: a slider stops at both ends, a list is a ring of named values."""
+
+    SLIDER = "slider"
+    LIST = "list"
+
+
+@dataclass(frozen=True)
+class MenuSetting:
+    """One setting that exists only in the on-screen menu, found by its page and entry name.
+
+    A slider has a ``minimum`` and a ``maximum`` and its values are whole numbers. A list has ``options``
+    in menu order and its values are the option names (lower case). No channel reads or writes either
+    kind, so a value is never verified.
+    """
+
+    name: str
+    page: str
+    entry: str
+    kind: MenuKind
+    minimum: int = 0
+    maximum: int = 0
+    options: tuple[str, ...] = ()
+
+
+MenuValue = int | str
+
+
+def _slider(name: str, page: str, entry: str, minimum: int, maximum: int) -> MenuSetting:
+    return MenuSetting(name, page, entry, MenuKind.SLIDER, minimum=minimum, maximum=maximum)
+
+
+def _list(name: str, page: str, entry: str, *options: str) -> MenuSetting:
+    return MenuSetting(name, page, entry, MenuKind.LIST, options=options)
+
+
+# Measured on the device: sliders stop at both ends and change by one per key; lists are rings in the
+# order of the options. The entries of the Misc page are left out on purpose (it holds Reset).
+MENU_SETTINGS = (
+    _list("effect", "Picture", "Effect", "standard", "game", "movie", "photo", "vivid"),
+    _slider("saturation", "Colour", "Saturation", 0, 100),
+    _slider("low-blue-light", "Display", "Low Blue Light", 0, 10),
+    _list("aspect", "Display", "Aspect", "full", "16:9", "4:3"),
+    _list("dcr", "Display", "DCR", "off", "on"),
+    _list("rotate", "Display", "Rotate", "0", "180"),
+    _list("overdrive", "Display", "OD", "off", "on"),
+    _slider("volume", "Audio", "Volume", 0, 100),
+    _list("mute", "Audio", "Mute", "off", "on"),
+    _list("audio-source", "Audio", "Audio Source", "digital", "analog"),
+)
+MENU_SETTING_NAMES = tuple(setting.name for setting in MENU_SETTINGS)
+
+
+def find_menu_setting(name: str) -> MenuSetting | None:
+    """The menu-only setting with this name, or ``None``."""
+    for setting in MENU_SETTINGS:
+        if setting.name == name:
+            return setting
+    return None
+
+
+def find_any_setting(settings: Sequence[Setting], name: str) -> Setting | MenuSetting:
+    """A readable setting from ``settings`` or a menu-only one; a usage error lists every valid name."""
+    for setting in settings:
+        if setting.name == name:
+            return setting
+    menu_setting = find_menu_setting(name)
+    if menu_setting is None:
+        valid = ", ".join([*(setting.name for setting in settings), *MENU_SETTING_NAMES])
+        raise UsageError(f"unknown setting {name!r} (valid: {valid})")
+    return menu_setting
+
+
+def parse_menu_value(setting: MenuSetting, text: str) -> MenuValue:
+    """Turn the command-line text into a slider number or a list option; anything else is a usage error.
+
+    List values are matched without regard to case and returned as the option name.
+    """
+    if setting.kind is MenuKind.LIST:
+        for option in setting.options:
+            if option == text.lower():
+                return option
+        raise UsageError(f"{setting.name} takes one of: {', '.join(setting.options)}, got {text!r}")
+    if DECIMAL.fullmatch(text) is None or not text.isascii():
+        raise UsageError(f"{setting.name} takes a whole number from {setting.minimum} to {setting.maximum}, got {text!r}")
+    number = int(text)
+    if not setting.minimum <= number <= setting.maximum:
+        raise UsageError(f"{setting.name} must be between {setting.minimum} and {setting.maximum}, got {number}")
+    return number

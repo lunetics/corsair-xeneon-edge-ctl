@@ -1,0 +1,1 @@
+{"ok": true, "command": "get", "data": {"setting": "saturation", "value": 70, "verified": false, "known_by": "set"}, "error": null}

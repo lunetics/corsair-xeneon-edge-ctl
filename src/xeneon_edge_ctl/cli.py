@@ -16,9 +16,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn, TextIO
 
-from xeneon_edge_ctl import __version__, apply, interactive, lock, osd, power, profile, state
+from xeneon_edge_ctl import __version__, apply, interactive, lock, osd, power, profile, remembered, state
 from xeneon_edge_ctl.errors import EXIT_OK, UsageError, XeneonError
-from xeneon_edge_ctl.model import SETTINGS, Setting, find_setting, format_value, parse_value
+from xeneon_edge_ctl.model import (
+    MENU_SETTING_NAMES,
+    SETTINGS,
+    MenuSetting,
+    Setting,
+    find_any_setting,
+    find_setting,
+    format_value,
+    parse_value,
+)
 from xeneon_edge_ctl.transport.ddc import DdcTransport, Runner, subprocess_runner
 from xeneon_edge_ctl.transport.hid import DEV_ROOT, SYSFS_ROOT, DevHidIo, HidIo, HidTransport
 
@@ -107,12 +116,13 @@ def build_parser(settings: Sequence[Setting]) -> argparse.ArgumentParser:
     _add_common_options(parser, after_command=False)
     commands = parser.add_subparsers(dest="command", required=True, parser_class=_ArgumentParser, metavar="command")
     names = ", ".join(setting.name for setting in settings)
+    all_names = ", ".join([names, *MENU_SETTING_NAMES])
 
     status = commands.add_parser("status", help="read every setting, plus HID node, DDC/CI bus and firmware")
     _add_common_options(status, after_command=True)
 
-    get = commands.add_parser("get", help="read one setting")
-    get.add_argument("setting", help=f"one of: {names}")
+    get = commands.add_parser("get", help="read one setting; for a menu-only setting, print the remembered value")
+    get.add_argument("setting", help=f"one of: {all_names}")
     _add_common_options(get, after_command=True)
 
     set_ = commands.add_parser("set", help="write one setting, read it back, fail on a mismatch")
@@ -208,8 +218,25 @@ def _run_status(args: argparse.Namespace, environment: Environment) -> Outcome:
     return Outcome(data, "\n".join(lines))
 
 
+def _get_menu_setting(setting: MenuSetting, environment: Environment) -> Outcome:
+    """The remembered value of a menu-only setting. Nothing is read from the display and no lock is taken."""
+    entry = remembered.load_values_for(environment.env).get(setting.name)
+    data: dict[str, object] = {
+        "setting": setting.name,
+        "value": None if entry is None else entry.value,
+        "verified": False,
+        "known_by": None if entry is None else entry.known_by,
+    }
+    if entry is None:
+        return Outcome(data, "unknown", (f"{setting.name}: no value is remembered; the display cannot report it",))
+    warning = f"{setting.name}: remembered value ({entry.known_by}), not read from the display"
+    return Outcome(data, str(entry.value), (warning,))
+
+
 def _run_get(args: argparse.Namespace, environment: Environment) -> Outcome:
-    setting = find_setting(environment.settings, args.setting)
+    setting = find_any_setting(environment.settings, args.setting)
+    if isinstance(setting, MenuSetting):
+        return _get_menu_setting(setting, environment)
     value = state.read_settings(_open_device(environment, args.ddc_bus), [setting])[setting.name]
     return Outcome({"setting": setting.name, "value": value}, format_value(setting, value))
 

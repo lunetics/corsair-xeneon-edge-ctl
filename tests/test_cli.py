@@ -16,7 +16,7 @@ from pathlib import Path
 
 from support import CommandResult, FakeDisplay, FakeHidIo, FakeRunner, SafeTestCase, make_edge_sysfs
 
-from xeneon_edge_ctl import cli, model
+from xeneon_edge_ctl import cli, model, remembered
 
 ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = Path(__file__).resolve().parent / "golden"
@@ -37,13 +37,28 @@ class CliTestCase(SafeTestCase):
         self.runner = FakeRunner(self.display)
         self.sysfs = self.tmp / "sys"
         self.settings: Sequence[model.Setting] = model.SETTINGS
-        self.env = {"XDG_RUNTIME_DIR": str(self.tmp / "run")}
+        self.env = {"XDG_RUNTIME_DIR": str(self.tmp / "run"), "XDG_STATE_HOME": str(self.tmp / "state")}
         self.now = FIXED_TIME
         self.sleeps: list[float] = []
 
     @property
     def lock_file(self) -> Path:
         return self.tmp / "run" / "xeneon-edge.lock"
+
+    @property
+    def values_file(self) -> Path:
+        """The remembered values of the menu-only settings."""
+        return self.tmp / "state" / "corsair-xeneon-edge-ctl" / "osd-values.json"
+
+    def remember(self, name: str, value: model.MenuValue, known_by: str = remembered.KNOWN_BY_SET) -> None:
+        """Put a remembered value of a menu-only setting into the values file."""
+        menu_setting = model.find_menu_setting(name)
+        assert menu_setting is not None
+        remembered.remember(self.values_file, menu_setting, value, known_by)
+
+    def remembered_values(self) -> dict[str, tuple[model.MenuValue, str]]:
+        """The values file as ``{setting: (value, known_by)}``; empty when it is missing or unreadable."""
+        return {name: (entry.value, entry.known_by) for name, entry in remembered.load_values(self.values_file).items()}
 
     def invoke(self, *argv: str, **overrides: object) -> tuple[int, str, str]:
         """Run the CLI once; ``overrides`` replace fields of the ``Environment`` (stdin, terminal_factory, ...)."""
@@ -135,9 +150,10 @@ class GetTests(CliTestCase):
         self.assertEqual(self.invoke("get", "contrast")[0], 0)
 
     def test_get_rejects_unknown_settings(self) -> None:
-        code, out, err = self.invoke("get", "volume")
+        code, out, err = self.invoke("get", "gamma")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("backlight", err)
+        self.assertIn("volume", err)
         self.assertEqual(self.device_traffic(), 0)
 
 

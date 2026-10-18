@@ -24,7 +24,12 @@ before changing behaviour.
 - Every refused command keeps a test that proves the refusal; the Reset
   confirmation keeps a test that proves nothing is sent without it.
 - Read the display state from the device; never trust a cached value. The
-  display does not report changes.
+  display does not report changes. The one exception are the menu-only
+  settings, which the display cannot report at all; see
+  [docs/design.md](docs/design.md#remembered-values).
+- A key run that the tool plans (`set` of a menu-only setting) never enters
+  the Misc page, and its single-lost-key check keeps a test that proves a run
+  reaching Reset is refused. See [docs/design.md](docs/design.md#key-paths).
 - Find the DDC/CI bus by the monitor identity `CRX:XENEON EDGE`, never by a bus
   number.
 

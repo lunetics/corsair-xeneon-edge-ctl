@@ -1,6 +1,6 @@
 # Design
 
-Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`, `osd open`/`key`/`where`/`close`/`interactive`. Settings that exist only in the on-screen menu follow in a later version.
+Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `profile save`/`apply`/`list`/`show`, `blank`, `unblank`, `osd open`/`key`/`where`/`close`/`interactive`. Specified, not implemented: `set` and `get` for the [menu-only settings](#menu-only-settings). Menu-only settings in profiles follow in a later version.
 
 ## Contents
 
@@ -12,6 +12,7 @@ Status: accepted design for version 0.1. Implemented: `status`, `get`, `set`, `p
 - [Single writer](#single-writer)
 - [Profiles](#profiles)
 - [OSD key control](#osd-key-control)
+- [Menu-only settings](#menu-only-settings)
 - [Safety](#safety)
 - [Testing and acceptance](#testing-and-acceptance)
 
@@ -34,7 +35,7 @@ so the tool always reads the current value from the device.
 |---|---|---|
 | USB HID (`/dev/hidraw*`) | 64-byte reports; command `0x0E` reads the screen state, `0x0F` writes (group `01` OSD keys, `02` sliders 0–100, `03` RGB gains 0–255) | exact RGB gains, OSD brightness, OSD key presses |
 | DDC/CI (`ddcutil`) | MCCS VCP codes over the video cable | backlight, contrast, sharpness, colour preset, OSD language, power mode |
-| OSD key navigation | HID key presses through the on-screen menu | working the menu by hand ([OSD key control](#osd-key-control)); settings without HID or DDC/CI access (later version) |
+| OSD key navigation | HID key presses through the on-screen menu | working the menu by hand ([OSD key control](#osd-key-control)); settings without HID or DDC/CI access ([Menu-only settings](#menu-only-settings)) |
 
 Known traps:
 
@@ -68,9 +69,8 @@ HID and labels DDC/CI gain values as "stored user gains". With the user preset
 active, a gain written over HID also changes the stored user gain that DDC/CI
 reports, and writing the user preset again left the gains unchanged (one test).
 
-Settings that exist only in the on-screen menu (effect, saturation, low blue
-light, aspect, DCR, overdrive, audio, menu time, OSD position) follow in a later
-version as "written, not verified" values.
+Settings that exist only in the on-screen menu are written with OSD keys and
+cannot be verified; see [Menu-only settings](#menu-only-settings).
 
 ## Architecture
 
@@ -111,8 +111,8 @@ Command name: `xeneon-edge-ctl`.
 | Command | Effect |
 |---|---|
 | `status` | read every readable setting, plus HID node, DDC/CI bus and firmware |
-| `get <setting>` | read one setting |
-| `set <setting> <value>` | write one setting, read it back, fail on a mismatch |
+| `get <setting>` | read one setting; for a menu-only setting, print the remembered value |
+| `set <setting> <value>` | write one setting, read it back, fail on a mismatch; a menu-only setting is written with OSD keys and not verified |
 | `profile save <name>` | store the current readable settings |
 | `profile apply <name>` | write a profile in a fixed order and verify it |
 | `profile list` / `profile show <name>` | list or print stored profiles |
@@ -216,8 +216,9 @@ The transport allowlist admits exactly these four frames.
 - While editing, `left` and `right` change the value at once; `select` keeps it,
   `back` restores the previous value. Both return to the entry.
 - With DCR on, entering Picture lands on Sharpness instead of Brightness. The
-  DCR state cannot be read; the tool assumes off unless `osd open --dcr on` says
-  otherwise.
+  DCR state cannot be read; the tool assumes the remembered `dcr` value, or off
+  when it is unknown, unless `osd open --dcr` says otherwise (see
+  [Remembered values](#remembered-values)).
 - The menu closes itself after "Menu Time" (10 to 60 s, 20 s by default) without
   a key press. Keys sent after that land somewhere else.
 
@@ -302,6 +303,152 @@ the single commands; the lock is taken for each key press, not for the session.
   discarded, so a held-down arrow key presses at most one key per action and
   nothing keeps going after the key is released.
 
+## Menu-only settings
+
+Ten settings exist only in the on-screen menu: no HID or DDC/CI command reads
+or writes them. `set` writes them with a planned run of OSD keys. The display
+cannot report them, so such a value is **written, not verified**.
+
+| Setting | Menu entry | Kind | Values |
+|---|---|---|---|
+| `effect` | Picture > Effect | list | `standard`, `game`, `movie`, `photo`, `vivid` |
+| `saturation` | Colour > Saturation | slider | 0–100 |
+| `low-blue-light` | Display > Low Blue Light | slider | 0–10 |
+| `aspect` | Display > Aspect | list | `full`, `16:9`, `4:3` |
+| `dcr` | Display > DCR | list | `off`, `on` |
+| `rotate` | Display > Rotate | list | `0`, `180` |
+| `overdrive` | Display > OD | list | `off`, `on` |
+| `volume` | Audio > Volume | slider | 0–100 |
+| `mute` | Audio > Mute | list | `off`, `on` |
+| `audio-source` | Audio > Audio Source | list | `digital`, `analog` |
+
+Measured on the device: sliders stop at both ends and change by one per key;
+lists are rings in the order of the table. List values are matched without
+regard to case. The entries of the Misc page (Menu Time, OSD H Position,
+OSD V Position) cannot be set this way, because Misc holds Reset (see
+[Key paths](#key-paths)). `status`, `profile save` and `profile apply` cover
+the readable settings only; a menu-only setting in a profile file is a usage
+error.
+
+### Writing a menu-only setting
+
+`set <setting> <value> [--from <value>]` does, under the writer lock:
+
+1. Read every readable setting as a snapshot.
+2. Forget the remembered value of the setting (see
+   [Remembered values](#remembered-values)), so a run that does not finish
+   leaves it unknown.
+3. Send the keys of `osd open`, walk to the entry, `select` to start editing,
+   change the value, `select` to keep it, then the keys of `osd close`.
+4. Read the readable settings again and compare them with the snapshot (see
+   [Collateral check](#collateral-check)).
+5. Remember the new value.
+
+The keys follow the rules of [OSD key control](#osd-key-control): 150 ms
+apart, the tracked state saved after every key, unknown after a failed key.
+The whole run is planned and checked before the first key is sent.
+
+**Sliders** are set by clamping, so the current value is not needed: pressing
+`left` (maximum − minimum + 1) times reaches the minimum from any value, and
+(value − minimum) presses of `right` then reach the value. When
+(value − minimum) is larger than (maximum − value), the run clamps at the
+maximum with `right` and counts down with `left` instead. Extra presses at an
+end change nothing, so the clamp also absorbs a lost key there. A run for
+`saturation` or `volume` takes at most about 170 keys, about 25 s.
+
+**Lists** are rings, so the run needs the current value. It comes from
+`--from <value>` when given, else from the remembered value. Without either,
+`set` refuses with exit code 3 and sends nothing. The run takes the shorter
+way around the ring unless the [key path check](#key-paths) requires the
+other way. When the current value equals the target, `set` sends nothing and
+exits with code 0. `--from` on a slider is a usage error.
+
+`data` holds `setting`, `value`, `verified` (always `false`) and `keys`, the
+number of keys sent:
+
+```json
+{"ok": true, "command": "set", "data": {"setting": "saturation", "value": 70, "verified": false, "keys": 146}, "error": null}
+```
+
+`get <menu-only setting>` reads nothing from the display. It prints the
+remembered value with `verified` `false` and `known_by` (`set` or `stated`),
+or `value` and `known_by` `null` when the value is unknown; both exit with
+code 0.
+
+### Remembered values
+
+The tool remembers the last value of every menu-only setting in
+`$XDG_STATE_HOME/corsair-xeneon-edge-ctl/osd-values.json` (`~/.local/state`
+when unset), replaced atomically. Each value records how it became known:
+`set` (written by a completed run) or `stated` (given by a person with
+`--from`, or with `--dcr` on `osd open` and `osd interactive`).
+
+This is the one place where the tool works from a stored value instead of
+reading the device. It holds because the display has no buttons and the touch
+screen does not reach the menu: only software that sends OSD keys changes
+these values (this tool, the vendor software, research scripts), and the menu
+entry Reset. A value is forgotten:
+
+- when a `set` run of that setting starts (step 2 above);
+- when `osd key` or `osd interactive` keeps an edit of that entry (`select`
+  while editing);
+- all values, after a confirmed Reset;
+- when the collateral check of a run finds a difference.
+
+A lost key press is not detected: a list value can end one step off, and the
+remembered value is then wrong without any sign. `--from` corrects it. A
+missing or unreadable file means that every value is unknown.
+
+`dcr` also decides where entering Picture lands. A `set dcr` run updates the
+DCR assumption of the tracked state with the value it wrote. `osd open` and
+`osd interactive` without `--dcr` take the remembered `dcr` value, or off when
+it is unknown; an explicit `--dcr` wins and is remembered as stated. A `set`
+run assumes the same DCR value as `osd open` would.
+
+### Key paths
+
+A lost key press (measured upper bound about 1 %) leaves the real cursor
+behind the tracked one. The keys of a `set` run are chosen so that a single
+lost key never brings the cursor to Reset:
+
+- Pages are reached from Picture with `right` only: Colour 1, Display 2,
+  Audio 3. A lost key leaves the cursor on an earlier page. The run never
+  enters Misc.
+- Entries are reached from the first entry of the page with `right` only,
+  never with `left` around the ring.
+- Before any key is sent, the planner simulates the run with the menu model
+  once for every key in it, with that one key lost. If any of these runs
+  would press `select` on Reset, or reaches a key whose effect is not
+  measured, the planner tries the other way around the ring for a list value;
+  when no way passes, `set` refuses with exit code 3. Example: when the
+  `select` into Audio is lost, the `right` meant for Mute moves the page
+  cursor onto Misc, the next `select` enters Misc on Language, and a `left`
+  for the value would land on Reset before the closing `select`.
+
+The simulation starts on the menu as `osd open` leaves it. A lost key among
+the keys of `osd open` itself is not covered; that is the same risk as for
+`osd open` alone.
+
+A lost key can still change a neighbour: a lost `right` on the way to
+Display > OD edits Rotate instead. Outside Misc every entry is a value, so
+such a miss changes a value but starts no action. When the `select` that
+should start editing is lost, the arrows move the cursor, the closing
+`select` starts editing whatever entry it reached, and the first `back` of
+`osd close` discards that edit.
+
+### Collateral check
+
+The snapshot before the run and the reading after it cover every readable
+setting. When a value differs, the run did not do what was planned: the tool
+writes the snapshot back in the order of `profile apply` (preset, gains, the
+rest), reads every value back, forgets the remembered value of the setting it
+was setting, and exits with code 6, naming each changed value and whether it
+was restored.
+
+The check sees a miss only when it changes a readable setting: Brightness,
+Contrast and Sharpness on Picture, Temperature and the gains on Colour. A miss
+that changes another menu-only setting stays unseen.
+
 ## Safety
 
 The Xeneon Edge has no buttons. A command that switches it off or resets it can
@@ -319,7 +466,9 @@ checks that nothing reaches the transport.
 
 The OSD entry "Reset" is not refused outright: `select` on it needs
 `--confirm-reset` (see [Reset](#reset)). "Reset" is the neighbour of "Language"
-in the Misc page, so `set language` uses DDC/CI only and never the menu.
+in the Misc page, so `set language` uses DDC/CI only and never the menu. A
+`set` run of a menu-only setting never enters Misc and is checked so that no
+single lost key reaches Reset (see [Key paths](#key-paths)).
 
 `blank` writes VCP `0xD6` = `05` under the writer lock. In one test on a DisplayPort connection the
 display went dark, kept answering DDC/CI (reading `0xD6` = `04`), and `0xD6` = `01` brought
@@ -349,3 +498,9 @@ connection is not tested yet; the tool does not detect the connector.
   - `osd interactive`: the same walk with the terminal keys, `q` closes the
     menu, the terminal works normally afterwards. The Reset question is
     answered with anything but `RESET`.
+  - menu-only `set`: each of the ten settings set to another value and back;
+    the person watching confirms each value in the menu or by its effect; the
+    readable settings are the same before and after.
+  - the collateral check bites: with `dcr` stated as `on` while the display has
+    DCR off, `set effect` edits Contrast instead of Effect; the run must exit
+    with code 6 and restore Contrast. `dcr` is stated as `off` afterwards.

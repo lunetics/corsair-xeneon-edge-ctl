@@ -20,6 +20,7 @@ from xeneon_edge_ctl.osd import Level
 
 ARROW_LEFT, ARROW_RIGHT, ENTER, ESCAPE, BACKSPACE = b"\x1b[D", b"\x1b[C", b"\r", b"\x1b", b"\x7f"
 CTRL_C = b"\x03"
+CLEAR_TO_END = b"\x1b[J"  # written by every redraw of the status line
 
 
 class TtyStream(io.StringIO):
@@ -403,10 +404,23 @@ class PseudoTerminalTests(InteractiveTestCase):
                 raise AssertionError(f"timed out waiting for {what}")
             time.sleep(0.005)
 
+    def wait_for_output(self, condition: object, what: str, shown: bytearray) -> None:
+        """Like ``wait_for``, but reads the master side into ``shown`` while it waits.
+
+        The wait is the ``select`` on the master, not a sleep: it ends early when the session writes.
+        """
+        deadline = time.monotonic() + 5
+        while not condition():  # type: ignore[operator]
+            if time.monotonic() > deadline:
+                raise AssertionError(f"timed out waiting for {what}")
+            if select.select([self.master], [], [], 0.005)[0]:
+                shown += os.read(self.master, 4096)
+
     def test_keys_typed_on_a_real_terminal_reach_the_display_and_the_terminal_is_restored(self) -> None:
         self.seed_open()
         original = termios.tcgetattr(self.slave)
         failures: list[str] = []
+        shown = bytearray()  # what the session wrote to the terminal; only the typist thread appends until it ends
 
         def typist() -> None:
             try:
@@ -414,7 +428,14 @@ class PseudoTerminalTests(InteractiveTestCase):
                 for index, keys in enumerate((ARROW_RIGHT, ENTER, ESCAPE, b"q"), start=1):
                     os.write(self.master, keys)
                     if keys != b"q":
-                        self.wait_for(lambda: len(self.io.frames) >= index, f"key {index} on the display")
+                        # The frame only says the key went out. The session then drops the input that is still
+                        # unread (discard_input) and draws the status line again, once at the start and once
+                        # per action. The next key goes in only after that redraw, or it would be dropped.
+                        self.wait_for_output(
+                            lambda: len(self.io.frames) >= index and shown.count(CLEAR_TO_END) >= 1 + index,
+                            f"key {index} on the display and the status line redrawn",
+                            shown,
+                        )
             except Exception as exc:  # noqa: BLE001 - reported by the main thread
                 failures.append(repr(exc))
                 os.close(self.master)  # hang up: the session sees the end of the input
@@ -436,7 +457,6 @@ class PseudoTerminalTests(InteractiveTestCase):
         self.assertEqual(self.sent, [RIGHT, SELECT, BACK, BACK, BACK, BACK])
         self.assertEqual(self.stored().level, Level.CLOSED)
         self.assertEqual(termios.tcgetattr(self.slave), original)
-        shown = b""
         while select.select([self.master], [], [], 0.05)[0]:
             try:
                 chunk = os.read(self.master, 4096)

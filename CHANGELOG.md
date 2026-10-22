@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-22
+
 ### Added
 
 - Project skeleton: licence, community files, udev rule for HID access, design
@@ -62,3 +64,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with code 6. `osd open` and `osd interactive` take the DCR assumption from the
   remembered `dcr` value unless `--dcr` is given.
 - Runs on Python 3.11 or newer; CI runs the tests on 3.11 to 3.14.
+
+[Unreleased]: https://github.com/lunetics/corsair-xeneon-edge-ctl/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/lunetics/corsair-xeneon-edge-ctl/releases/tag/v0.1.0

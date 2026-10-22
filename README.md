@@ -10,7 +10,7 @@ are trademarks of their respective owners.
 
 ## Status
 
-Pre-release. `status`, `get`, `set`, the `profile` commands,
+Version 0.1.0, the first release. `status`, `get`, `set`, the `profile` commands,
 `blank`/`unblank` and the `osd` commands for the on-screen menu keys work,
 including `osd interactive` for arrow-key control from the terminal. `set` and
 `get` also cover the ten settings that exist only in the on-screen menu; their
